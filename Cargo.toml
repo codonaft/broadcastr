@@ -1,0 +1,32 @@
+[package]
+name = "broadcastr"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Broadcast nostr events to other relays"
+repository = "https://github.com/codonaft/broadcastr"
+keywords = ["nostr", "relay", "social", "proxy", "server"]
+categories = ["network-programming"]
+readme = "README.md"
+documentation = "https://github.com/codonaft/broadcastr#readme"
+
+[dependencies]
+anyhow = "1"
+argh = "0.1"
+backoff = { version = "0.4", features = ["tokio"] }
+env_logger = "0.11"
+futures = "0.3"
+futures-util = { version = "0.3", default-features = false }
+governor = "0.10"
+humantime = "2"
+itertools = "0.14"
+log = "0.4"
+nonzero_ext = "0.3"
+nostr-relay-pool = "0.41"
+nostr-sdk = "0.41"
+reqwest = { version = "0.12", features = ["json"] }
+serde = "1"
+socket2 = "0.5"
+tokio = "1"
+tokio-tungstenite = "0.26"
+tungstenite = "0.26"
