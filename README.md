@@ -10,7 +10,7 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relay-sources <relay-sources> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relay-sources <relay-sources> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast nostr events to other relays
 
@@ -27,6 +27,8 @@ Options:
   --min-pow         pow difficulty limit (NIP-13)
   --allowed-pubkeys authors or mentioned authors (comma-separated
                     hex/bech32/NIP-21 allow-list)
+  --max-events-per-min
+                    max events by author per minute (default is 5)
   --allowed-kinds   limit event kinds with (comma-separated allow-list, e.g
                     "0,1,3,5,6,7,4550,34550")
   --disable-gossip  don't discover additional relays from user profiles

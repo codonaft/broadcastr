@@ -1,4 +1,5 @@
-use super::{Broadcastr, RateLimitEvents};
+use super::Broadcastr;
+use crate::RateLimits;
 use anyhow as ah;
 use futures::{SinkExt, StreamExt, future::join_all};
 use futures_util::stream::SplitSink;
@@ -47,7 +48,7 @@ pub(crate) async fn handle_ws_connection(
     ws_config: WebSocketConfig,
     args: Broadcastr,
     nostr_client: NostrClient,
-    limit_events_by_id: Arc<RateLimitEvents>,
+    rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
 ) -> ah::Result<()> {
     let ws_stream = accept_async_with_config(stream, Some(ws_config)).await?;
@@ -65,7 +66,7 @@ pub(crate) async fn handle_ws_connection(
                     &mut ws_sender,
                     &args,
                     &nostr_client,
-                    limit_events_by_id,
+                    rate_limits,
                     policy,
                 )
                 .await;
@@ -119,23 +120,14 @@ async fn handle_client_message(
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     args: &Broadcastr,
     nostr_client: &NostrClient,
-    limit_events_by_id: Arc<RateLimitEvents>,
+    rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
 ) {
     use ClientMessage::*;
     match client_message {
         Event(event) => {
             let event_id = event.id;
-            match handle_event(
-                event,
-                args,
-                ws_sender,
-                nostr_client,
-                limit_events_by_id,
-                policy,
-            )
-            .await
-            {
+            match handle_event(event, args, ws_sender, nostr_client, rate_limits, policy).await {
                 Ok(Some(broadcasted_event)) => {
                     broadcasted_events.push(broadcasted_event);
                 },
@@ -179,13 +171,20 @@ async fn handle_event(
     args: &Broadcastr,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     nostr_client: &NostrClient,
-    limit_events_by_id: Arc<RateLimitEvents>,
+    rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
 ) -> ah::Result<Option<BroadcastedEvent>> {
     policy.check_event(&event)?;
 
     let event_id = event.id;
-    if limit_events_by_id.check_key(&event_id).is_err() {
+    if rate_limits
+        .events_by_author
+        .check_key(&event.pubkey)
+        .is_err()
+    {
+        ah::bail!("rate-limit: too many attempts to transmit event by the same author");
+    }
+    if rate_limits.events_by_id.check_key(&event_id).is_err() {
         ah::bail!("rate-limit: too many attempts to transmit the same event");
     }
     log::debug!("received event {event_id}");

@@ -13,11 +13,13 @@ use nostr_relay_pool::{
     relay::{constants::MAX_EVENT_SIZE, limits::RelayEventLimits},
 };
 use nostr_sdk::{
-    Client as NostrClient, EventId, Options,
+    Client as NostrClient, EventId, Options, PublicKey,
     client::{Connection, ConnectionTarget},
 };
 use reqwest::Url;
-use std::{collections::HashSet, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
+};
 use tokio::{net::TcpListener, sync::watch};
 use tungstenite::protocol::WebSocketConfig;
 
@@ -59,6 +61,10 @@ struct Broadcastr {
     /// authors or mentioned authors (comma-separated hex/bech32/NIP-21 allow-list)
     #[argh(option)]
     allowed_pubkeys: Option<nostr::PublicKeys>,
+
+    /// max events by author per minute (default is 5)
+    #[argh(option, default = "nonzero!(5u32)")]
+    max_events_per_min: NonZeroU32,
 
     /// limit event kinds with
     /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
@@ -102,13 +108,19 @@ struct Broadcastr {
     max_frame_size: usize,
 }
 
+#[derive(Debug)]
+struct RateLimits {
+    events_by_author: RateLimitBy<PublicKey>,
+    events_by_id: RateLimitBy<EventId>,
+}
+
+type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
+
 #[derive(Debug, Clone, Default)]
 struct Urls(HashSet<Url>);
 
 #[derive(Debug, Clone)]
 struct DurationArg(Duration);
-
-type RateLimitEvents = RateLimiter<EventId, DefaultKeyedStateStore<EventId>, DefaultClock>;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ah::Result<()> {
@@ -188,14 +200,17 @@ async fn main() -> ah::Result<()> {
         .build();
     let policy = Arc::new(policy);
 
-    let limit_events_by_id = Arc::new(RateLimiter::keyed(MAX_EVENTS_BY_ID));
+    let rate_limits = Arc::new(RateLimits {
+        events_by_author: RateLimiter::keyed(Quota::per_minute(args.max_events_per_min)),
+        events_by_id: RateLimiter::keyed(MAX_EVENTS_BY_ID),
+    });
     let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
         serve(
             listener,
             ws_config,
             &args,
             &nostr_client,
-            &limit_events_by_id,
+            &rate_limits,
             &policy,
         )
         .boxed()
@@ -224,7 +239,7 @@ async fn serve(
     ws_config: WebSocketConfig,
     args: &Broadcastr,
     nostr_client: &NostrClient,
-    limit_events_by_id: &Arc<RateLimitEvents>,
+    rate_limits: &Arc<RateLimits>,
     policy: &Arc<nostr::Policy>,
 ) -> ah::Result<()> {
     loop {
@@ -236,7 +251,7 @@ async fn serve(
                         ws_config,
                         args.clone(),
                         nostr_client.clone(),
-                        limit_events_by_id.clone(),
+                        rate_limits.clone(),
                         policy.clone(),
                     )
                     .map_err(move |e| {
