@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+
+name="broadcastr"
+
+command="/usr/local/bin/${name}"
+command_user="nobody:nobody"
+command_background="true"
+command_args="${broadcastr_args}"
+
+pidfile="/run/${name}.pid"
+output_logger="logger"
+error_logger="logger"
+
+depend() {
+	need net
+	use logger
+}
