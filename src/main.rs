@@ -5,6 +5,7 @@ mod spam;
 use anyhow as ah;
 use argh::FromArgs;
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
+use env_logger::{Builder, Target};
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use nonzero_ext::*;
@@ -28,9 +29,9 @@ const MIN_SIZE: usize = 128;
 
 #[derive(FromArgs, Clone, Debug)]
 #[argh(help_triggers("-h", "--help"))]
-/// Broadcast nostr events to other relays
+/// Broadcast Nostr events to other relays
 struct Broadcastr {
-    /// the listener ws address (e.g. "ws://localhost:8080")
+    /// the listener ws URI (e.g. "ws://localhost:8080")
     #[argh(option)]
     listen: Url,
 
@@ -123,7 +124,9 @@ struct DurationArg(Duration);
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ah::Result<()> {
-    env_logger::init();
+    Builder::from_env("BROADCASTR_LOG")
+        .target(Target::Stdout)
+        .try_init()?;
 
     let args: Broadcastr = argh::from_env();
     log::info!("starting {:#?}", args);

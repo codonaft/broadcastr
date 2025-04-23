@@ -1,7 +1,14 @@
 # Broadcastr
+[![Crates.io](https://img.shields.io/crates/v/broadcastr)](https://crates.io/crates/broadcastr)
+[![Crates.io](https://img.shields.io/crates/d/broadcastr)](https://crates.io/crates/broadcastr)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2.svg?&logo=github&logoColor=white&labelColor=181717&style=flat-square)](#Support)
+
 Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWallet/blastr) with additional features:
 - [spam](https://spam.nostr.band) filtering
-- events filtering (kind, author/mention, [PoW](https://github.com/nostr-protocol/nips/blob/master/13.md))
+- events filtering
+    - kind
+    - author/mention
+    - [PoW](https://github.com/nostr-protocol/nips/blob/master/13.md)
 - gossip
 - tor relays
 
@@ -12,10 +19,10 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
 ```
 Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
-Broadcast nostr events to other relays
+Broadcast Nostr events to other relays
 
 Options:
-  --listen          the listener ws address (e.g. "ws://localhost:8080")
+  --listen          the listener ws URI (e.g. "ws://localhost:8080")
   --relays          relays or relay-list URIs (comma-separated, e.g.
                     "https://api.nostr.watch/v1/online,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
   --blocked-relays  same, but for ignored relays; put public URL to your
@@ -48,24 +55,30 @@ Options:
 </p>
 </details>
 
-## Installation
+## Install
 
 ### From crates.io
-```
+```bash
 cargo install --locked broadcastr
 ```
 
 ### From git
-```
+```bash
 cargo install --locked --force --git https://github.com/codonaft/broadcastr
+```
+
+## Run
+```
+BROADCASTR_LOG=info broadcastr --listen ws://localhost:8080 --relays https://api.nostr.watch/v1/online
 ```
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.
 
 If you found this repo useful and you want to support me, please
-- ⭐ it
-- check ⚡ [here](https://codonaft.com/sponsor)
+- ⭐ star
+- ⚡ [zap](https://zapper.nostrapps.org/zap?id=npub1alptdev5srcw2hxg03567p4k6xs3lgj7f6545suc0rzp0xw98svse7rg94&amount=5000)
+- 🌚 something [else](https://codonaft.com/sponsor)
 
 Your support keeps me going ❤️ (◕‿◕)
 
