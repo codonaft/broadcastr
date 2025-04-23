@@ -10,6 +10,7 @@ use nostr_sdk::{
     serde_json,
     util::BoxedFuture,
 };
+use reqwest::Url;
 use std::{borrow::Cow, collections::HashSet, ops::Sub, str::FromStr, sync::Arc};
 use tokio::{net::TcpStream, sync::watch, time};
 use tokio_tungstenite::{WebSocketStream, accept_async_with_config, tungstenite::Message};
@@ -17,7 +18,7 @@ use tungstenite::protocol::WebSocketConfig;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Policy {
-    pub blocked_relays: HashSet<RelayUrl>,
+    pub blocked_relays_receiver: watch::Receiver<HashSet<Url>>,
     pub allowed_pubkeys: HashSet<PublicKey>,
     pub allowed_kinds: HashSet<EventKind>,
     pub min_pow: Option<u8>,
@@ -234,7 +235,14 @@ impl AdmitPolicy for Policy {
         url: &'a RelayUrl,
     ) -> BoxedFuture<'a, Result<AdmitStatus, PolicyError>> {
         Box::pin(async move {
-            let result = if self.blocked_relays.contains(url) {
+            let blocked_relays = self
+                .blocked_relays_receiver
+                .borrow()
+                .iter()
+                .map(|i| i.as_str().parse().map_err(PolicyError::backend))
+                .collect::<Result<HashSet<RelayUrl>, PolicyError>>()?;
+
+            let result = if blocked_relays.contains(url) {
                 AdmitStatus::Rejected {
                     reason: Some("relay from block-list".to_string()),
                 }

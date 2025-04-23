@@ -10,17 +10,16 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relay-sources <relay-sources> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast nostr events to other relays
 
 Options:
   --listen          the listener ws address (e.g. "ws://localhost:8080")
-  --relay-sources   API endpoints/files with relay list (comma-separated, e.g.
-                    "https://api.nostr.watch/v1/online,file:///path/to/relays-in-array.json")
-  --blocked-relays  relays ignore-list (comma-separated, e.g.
-                    "wss://nostr.mutinywallet.com,ws://1.2.3.4:9000"); put
-                    public URL to your broadcastr here to avoid loops
+  --relays          relays or relay-list URIs (comma-separated, e.g.
+                    "https://api.nostr.watch/v1/online,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
+  --blocked-relays  same, but for ignored relays; put public URL to your
+                    broadcastr here to avoid loops
   --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
                     "127.0.0.1:9050")
   --proxy           connect to all relays using socks5 proxy

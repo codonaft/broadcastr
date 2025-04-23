@@ -34,13 +34,12 @@ struct Broadcastr {
     #[argh(option)]
     listen: Url,
 
-    /// API endpoints/files with relay list
-    /// (comma-separated, e.g. "https://api.nostr.watch/v1/online,file:///path/to/relays-in-array.json")
+    /// relays or relay-list URIs
+    /// (comma-separated, e.g. "https://api.nostr.watch/v1/online,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
     #[argh(option)]
-    relay_sources: Urls,
+    relays: Urls,
 
-    /// relays ignore-list
-    /// (comma-separated, e.g. "wss://nostr.mutinywallet.com,ws://1.2.3.4:9000");
+    /// same, but for ignored relays;
     /// put public URL to your broadcastr here to avoid loops
     #[argh(option)]
     blocked_relays: Option<Urls>,
@@ -125,7 +124,10 @@ struct DurationArg(Duration);
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ah::Result<()> {
     env_logger::init();
+
     let args: Broadcastr = argh::from_env();
+    log::info!("starting {:#?}", args);
+
     if args.proxy.is_some() && args.tor_proxy.is_some() {
         ah::bail!("ambiguous proxy arguments");
     }
@@ -172,22 +174,12 @@ async fn main() -> ah::Result<()> {
         opts
     };
 
-    let blocked_relays = args
-        .blocked_relays
-        .iter()
-        .flat_map(|r| r.0.iter())
-        .cloned()
-        .map(normalize_url)
-        .collect::<ah::Result<HashSet<Url>>>()?;
-
+    let (blocked_relays_sender, blocked_relays_receiver) = watch::channel(HashSet::default());
     let (spam_pubkeys_sender, spam_pubkeys_receiver) = watch::channel(HashSet::default());
     let (spam_events_sender, spam_events_receiver) = watch::channel(HashSet::default());
 
     let policy = nostr::Policy {
-        blocked_relays: blocked_relays
-            .iter()
-            .map(|i| Ok(i.as_str().parse()?))
-            .collect::<ah::Result<_>>()?,
+        blocked_relays_receiver,
         allowed_pubkeys: args.allowed_pubkeys.clone().unwrap_or_default().0,
         allowed_kinds: args.allowed_kinds.clone().unwrap_or_default().0,
         min_pow: args.min_pow,
@@ -218,7 +210,7 @@ async fn main() -> ah::Result<()> {
 
     if let Err(e) = try_join_all(
         [
-            relays::updater(blocked_relays, &args, &nostr_client).boxed(),
+            relays::updater(blocked_relays_sender, &args, &nostr_client).boxed(),
             spam::updater(&args, spam_pubkeys_sender, spam_events_sender).boxed(),
         ]
         .into_iter()
