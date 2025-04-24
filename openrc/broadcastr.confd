@@ -1,2 +1,1 @@
 broadcastr_args="--listen ws://localhost:8080 --relays https://api.nostr.watch/v1/online"
-BROADCASTR_LOG="info"

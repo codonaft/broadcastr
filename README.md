@@ -17,7 +17,7 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -49,6 +49,7 @@ Options:
   --connection-timeout
                     connection timeout (default is 15s)
   --request-timeout request timeout (default is 10s)
+  --log-level       log level (default is info)
   --tcp-backlog     max incoming connections per listener IP address
   --max-msg-size    event message size
   --max-frame-size  ws frame size
@@ -72,7 +73,7 @@ cargo install --locked --force --git https://github.com/codonaft/broadcastr
 
 ## Run
 ```
-BROADCASTR_LOG=info broadcastr --listen ws://localhost:8080 --relays https://api.nostr.watch/v1/online
+broadcastr --listen ws://localhost:8080 --relays https://api.nostr.watch/v1/online
 ```
 
 ## Support

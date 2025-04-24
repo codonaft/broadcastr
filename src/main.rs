@@ -5,9 +5,9 @@ mod spam;
 use anyhow as ah;
 use argh::FromArgs;
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use env_logger::{Builder, Target};
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
+use log::LevelFilter;
 use nonzero_ext::*;
 use nostr::PolicyWithSenders;
 use nostr_relay_pool::{
@@ -19,6 +19,7 @@ use nostr_sdk::{
     client::{Connection, ConnectionTarget},
 };
 use reqwest::Url;
+use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
     collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
 };
@@ -100,6 +101,10 @@ struct Broadcastr {
     #[argh(option, default = "DurationArg(Duration::from_secs(10))")]
     request_timeout: DurationArg,
 
+    /// log level (default is info)
+    #[argh(option, default = "LevelFilter::Info")]
+    log_level: LevelFilter,
+
     /// max incoming connections per listener IP address
     #[argh(option, default = "1024")]
     tcp_backlog: i32,
@@ -129,11 +134,14 @@ struct DurationArg(Duration);
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ah::Result<()> {
-    Builder::from_env("BROADCASTR_LOG")
-        .target(Target::Stdout)
-        .try_init()?;
-
     let args: Broadcastr = argh::from_env();
+    TermLogger::init(
+        args.log_level,
+        simplelog::Config::default(),
+        TerminalMode::Stderr,
+        ColorChoice::Auto,
+    )?;
+
     log::info!("starting {:#?}", args);
 
     if args.proxy.is_some() && args.tor_proxy.is_some() {

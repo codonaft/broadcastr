@@ -14,7 +14,6 @@ documentation = "https://github.com/codonaft/broadcastr#readme"
 anyhow = "1"
 argh = "0.1"
 backoff = { version = "0.4", features = ["tokio"] }
-env_logger = "0.11"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false }
 governor = "0.10"
@@ -26,6 +25,7 @@ nostr-relay-pool = "0.41"
 nostr-sdk = "0.41"
 reqwest = { version = "0.12", features = ["json"] }
 serde = "1"
+simplelog = "0.12"
 socket2 = "0.5"
 tokio = "1"
 tokio-tungstenite = "0.26"
