@@ -282,7 +282,10 @@ async fn new_listeners(args: &Broadcastr) -> ah::Result<Vec<TcpListener>> {
             socket.set_only_v6(true)?;
         }
         socket.set_reuse_address(true)?;
+
+        #[cfg(unix)]
         socket.set_reuse_port(true)?;
+
         socket.bind(&listen_addr.into())?;
         socket.listen(args.tcp_backlog)?;
 
