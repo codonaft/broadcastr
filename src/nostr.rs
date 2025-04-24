@@ -63,7 +63,7 @@ pub(crate) async fn handle_ws_connection(
     let ws_stream = accept_async_with_config(stream, Some(ws_config)).await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    let mut broadcasted_events = vec![];
+    let mut broadcasted = None;
     if let Ok(Some(Ok(Message::Text(text)))) =
         time::timeout(args.request_timeout.0, ws_receiver.next()).await
     {
@@ -71,7 +71,7 @@ pub(crate) async fn handle_ws_connection(
             Ok(client_message) => {
                 handle_client_message(
                     client_message,
-                    &mut broadcasted_events,
+                    &mut broadcasted,
                     &mut ws_sender,
                     &args,
                     &nostr_client,
@@ -88,10 +88,10 @@ pub(crate) async fn handle_ws_connection(
         return Ok(());
     }
 
-    for BroadcastedEvent {
+    if let Some(BroadcastedEvent {
         event_id,
         found_on_relays_before_broadcasting,
-    } in broadcasted_events
+    }) = broadcasted
     {
         let QueryEvent {
             found_on_relays,
@@ -125,7 +125,7 @@ pub(crate) async fn handle_ws_connection(
 
 async fn handle_client_message(
     client_message: ClientMessage<'_>,
-    broadcasted_events: &mut Vec<BroadcastedEvent>,
+    broadcasted: &mut Option<BroadcastedEvent>,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     args: &Broadcastr,
     nostr_client: &NostrClient,
@@ -138,7 +138,8 @@ async fn handle_client_message(
             let event_id = event.id;
             match handle_event(event, args, ws_sender, nostr_client, rate_limits, policy).await {
                 Ok(Some(broadcasted_event)) => {
-                    broadcasted_events.push(broadcasted_event);
+                    debug_assert!(broadcasted.is_none());
+                    *broadcasted = Some(broadcasted_event);
                 },
                 Ok(None) => (),
                 Err(e) => {
