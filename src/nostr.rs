@@ -17,13 +17,21 @@ use tokio_tungstenite::{WebSocketStream, accept_async_with_config, tungstenite::
 use tungstenite::protocol::WebSocketConfig;
 
 #[derive(Debug, Clone)]
-pub(crate) struct Policy {
-    pub blocked_relays_receiver: watch::Receiver<HashSet<Url>>,
-    pub allowed_pubkeys: HashSet<PublicKey>,
-    pub allowed_kinds: HashSet<EventKind>,
-    pub min_pow: Option<u8>,
-    pub spam_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
-    pub spam_events_receiver: watch::Receiver<HashSet<EventId>>,
+pub struct Policy {
+    allowed_pubkeys: HashSet<PublicKey>,
+    disable_mentions: bool,
+    allowed_kinds: HashSet<EventKind>,
+    min_pow: Option<u8>,
+    blocked_relays_receiver: watch::Receiver<HashSet<Url>>,
+    spam_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
+    spam_events_receiver: watch::Receiver<HashSet<EventId>>,
+}
+
+pub(crate) struct PolicyWithSenders {
+    pub policy: Policy,
+    pub blocked_relays_sender: watch::Sender<HashSet<Url>>,
+    pub spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
+    pub spam_events_sender: watch::Sender<HashSet<EventId>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -382,6 +390,37 @@ fn mentioned_pubkey(tag: &Tag) -> Option<PublicKey> {
     None
 }
 
+impl PolicyWithSenders {
+    pub(crate) fn new(args: &Broadcastr) -> ah::Result<Self> {
+        let (blocked_relays_sender, blocked_relays_receiver) = watch::channel(HashSet::default());
+        let (spam_pubkeys_sender, spam_pubkeys_receiver) = watch::channel(HashSet::default());
+        let (spam_events_sender, spam_events_receiver) = watch::channel(HashSet::default());
+        let policy = Policy {
+            allowed_pubkeys: args.allowed_pubkeys.clone().unwrap_or_default().0,
+            disable_mentions: args.disable_mentions,
+            allowed_kinds: args.allowed_kinds.clone().unwrap_or_default().0,
+            min_pow: args.min_pow,
+            blocked_relays_receiver,
+            spam_pubkeys_receiver,
+            spam_events_receiver,
+        };
+
+        if policy.disable_mentions && policy.allowed_pubkeys.is_empty() {
+            ah::bail!(
+                "--disable-mentions does nothing if --allowed-pubkeys is not set; perhaps you \
+                 forgot to set the --allowed-pubkeys"
+            );
+        }
+
+        Ok(Self {
+            policy,
+            blocked_relays_sender,
+            spam_pubkeys_sender,
+            spam_events_sender,
+        })
+    }
+}
+
 impl Policy {
     fn check_event(&self, event: &Event) -> ah::Result<()> {
         if let Some(min_pow) = self.min_pow {
@@ -391,13 +430,15 @@ impl Policy {
         }
 
         if !self.allowed_kinds.is_empty() && !self.allowed_kinds.contains(&event.kind) {
-            return Err(ah::anyhow!("unexpected kind {}", event.kind));
+            ah::bail!("unexpected kind {}", event.kind);
         } else if !self.allowed_pubkeys.is_empty() {
             if self.allowed_pubkeys.contains(&event.pubkey) {
                 return Ok(());
             }
 
-            if !self.mentions_allowed_pubkeys(event) {
+            if self.disable_mentions {
+                ah::bail!("unexpected author");
+            } else if !self.mentions_allowed_pubkeys(event) {
                 ah::bail!("unexpected author or mentioned public key");
             }
         }

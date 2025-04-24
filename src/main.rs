@@ -9,6 +9,7 @@ use env_logger::{Builder, Target};
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use nonzero_ext::*;
+use nostr::PolicyWithSenders;
 use nostr_relay_pool::{
     RelayLimits,
     relay::{constants::MAX_EVENT_SIZE, limits::RelayEventLimits},
@@ -21,7 +22,7 @@ use reqwest::Url;
 use std::{
     collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
 };
-use tokio::{net::TcpListener, sync::watch};
+use tokio::net::TcpListener;
 use tungstenite::protocol::WebSocketConfig;
 
 const MAX_EVENTS_BY_ID: Quota = Quota::per_hour(nonzero!(3u32));
@@ -61,6 +62,10 @@ struct Broadcastr {
     /// authors or mentioned authors (comma-separated hex/bech32/NIP-21 allow-list)
     #[argh(option)]
     allowed_pubkeys: Option<nostr::PublicKeys>,
+
+    /// disallow mentions (of the allowed authors) by others (default is false)
+    #[argh(switch)]
+    disable_mentions: bool,
 
     /// max events by author per minute (default is 5)
     #[argh(option, default = "nonzero!(5u32)")]
@@ -177,18 +182,12 @@ async fn main() -> ah::Result<()> {
         opts
     };
 
-    let (blocked_relays_sender, blocked_relays_receiver) = watch::channel(HashSet::default());
-    let (spam_pubkeys_sender, spam_pubkeys_receiver) = watch::channel(HashSet::default());
-    let (spam_events_sender, spam_events_receiver) = watch::channel(HashSet::default());
-
-    let policy = nostr::Policy {
-        blocked_relays_receiver,
-        allowed_pubkeys: args.allowed_pubkeys.clone().unwrap_or_default().0,
-        allowed_kinds: args.allowed_kinds.clone().unwrap_or_default().0,
-        min_pow: args.min_pow,
-        spam_pubkeys_receiver,
-        spam_events_receiver,
-    };
+    let PolicyWithSenders {
+        policy,
+        blocked_relays_sender,
+        spam_pubkeys_sender,
+        spam_events_sender,
+    } = nostr::PolicyWithSenders::new(&args)?;
     let nostr_client = NostrClient::builder()
         .opts(opts)
         .admit_policy(policy.clone())
