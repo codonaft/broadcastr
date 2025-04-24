@@ -106,8 +106,8 @@ pub(crate) async fn handle_ws_connection(
             event_id,
             broadcasted_to_new_relays > 0,
             format!(
-                "published to {broadcasted_to_new_relays} relays (now it's available on {} of {} \
-                 relays)",
+                "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now it's \
+                 available on {} of {} relays)",
                 found_on_relays.len(),
                 found_on_relays
                     .len()
