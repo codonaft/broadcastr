@@ -1,7 +1,8 @@
 use super::Broadcastr;
 use crate::RateLimits;
 use anyhow as ah;
-use futures::{SinkExt, StreamExt, future::join_all};
+use anyhow::Context;
+use futures::{SinkExt, StreamExt, TryFutureExt, future::join_all};
 use futures_util::stream::SplitSink;
 use nostr_sdk::{
     Alphabet, Client as NostrClient, ClientMessage, Event, EventId, Filter, JsonUtil,
@@ -60,7 +61,9 @@ pub(crate) async fn handle_ws_connection(
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
 ) -> ah::Result<()> {
-    let ws_stream = accept_async_with_config(stream, Some(ws_config)).await?;
+    let ws_stream = accept_async_with_config(stream, Some(ws_config))
+        .await
+        .context("accept_async_with_config")?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     let mut broadcasted = None;
@@ -72,7 +75,7 @@ pub(crate) async fn handle_ws_connection(
                 handle_client_message(
                     client_message,
                     &mut broadcasted,
-                    &mut ws_sender,
+                    ws_sender,
                     &args,
                     &nostr_client,
                     rate_limits,
@@ -85,6 +88,11 @@ pub(crate) async fn handle_ws_connection(
             },
         }
     } else {
+        let _ = ws_sender
+            .close()
+            .await
+            .context("ws_sender.close after failure")
+            .map_err(|e| log::error!("{e}"));
         return Ok(());
     }
 
@@ -96,37 +104,29 @@ pub(crate) async fn handle_ws_connection(
         let QueryEvent {
             found_on_relays,
             relays_without_event,
-        } = QueryEvent::find(event_id, &args, &nostr_client).await?;
-
+        } = QueryEvent::find(event_id, &args, &nostr_client)
+            .await
+            .context("re-query")?;
         let broadcasted_to_new_relays = found_on_relays
             .len()
             .saturating_sub(found_on_relays_before_broadcasting);
-
-        ok(
-            event_id,
-            broadcasted_to_new_relays > 0,
-            format!(
-                "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now it's \
-                 available on {} of {} relays)",
-                found_on_relays.len(),
-                found_on_relays
-                    .len()
-                    .saturating_add(relays_without_event.len()),
-            ),
-            &mut ws_sender,
-        )
-        .await;
+        log::info!(
+            "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now it's \
+             available on {} of {} relays)",
+            found_on_relays.len(),
+            found_on_relays
+                .len()
+                .saturating_add(relays_without_event.len()),
+        );
     }
 
-    ws_sender.close().await?;
-    log::debug!("closed connection with client");
     Ok(())
 }
 
 async fn handle_client_message(
     client_message: ClientMessage<'_>,
     broadcasted: &mut Option<BroadcastedEvent>,
-    ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
+    mut ws_sender: SplitSink<WebSocketStream<TcpStream>, Message>,
     args: &Broadcastr,
     nostr_client: &NostrClient,
     rate_limits: Arc<RateLimits>,
@@ -136,25 +136,28 @@ async fn handle_client_message(
     match client_message {
         Event(event) => {
             let event_id = event.id;
-            match handle_event(event, args, ws_sender, nostr_client, rate_limits, policy).await {
+
+            tokio::spawn(
+                async move {
+                    ok(event_id, true, "", &mut ws_sender).await;
+                    ws_sender.close().await.context("ws_sender.close")?;
+                    log::debug!("closed connection with client");
+                    Ok::<_, ah::Error>(())
+                }
+                .map_err(|e| log::error!("failed to finalize connection: {e}")),
+            );
+
+            match handle_event(event, args, nostr_client, rate_limits, policy).await {
                 Ok(Some(broadcasted_event)) => {
                     debug_assert!(broadcasted.is_none());
                     *broadcasted = Some(broadcasted_event);
                 },
                 Ok(None) => (),
-                Err(e) => {
-                    ok(
-                        event_id,
-                        false,
-                        format!("failed to handle a message: {e}"),
-                        ws_sender,
-                    )
-                    .await
-                },
+                Err(e) => log::error!("failed to handle a message: {e}"),
             }
         },
-        Close(subscription_id) => closed(subscription_id, "close", ws_sender).await,
-        Auth(event) => ok(event.id, false, "unexpected message", ws_sender).await,
+        Close(subscription_id) => closed(subscription_id, "close", &mut ws_sender).await,
+        Auth(event) => ok(event.id, false, "unexpected message", &mut ws_sender).await,
         Req {
             subscription_id, ..
         }
@@ -163,7 +166,7 @@ async fn handle_client_message(
         }
         | Count {
             subscription_id, ..
-        } => closed(subscription_id, "unexpected message", ws_sender).await,
+        } => closed(subscription_id, "unexpected message", &mut ws_sender).await,
         NegOpen {
             subscription_id, ..
         }
@@ -172,14 +175,13 @@ async fn handle_client_message(
         }
         | NegClose {
             subscription_id, ..
-        } => neg_err(subscription_id, "unexpected message", ws_sender).await,
+        } => neg_err(subscription_id, "unexpected message", &mut ws_sender).await,
     }
 }
 
 async fn handle_event(
     event: Cow<'_, Event>,
     args: &Broadcastr,
-    ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     nostr_client: &NostrClient,
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
@@ -202,7 +204,9 @@ async fn handle_event(
     let QueryEvent {
         found_on_relays,
         relays_without_event,
-    } = QueryEvent::find(event_id, args, nostr_client).await?;
+    } = QueryEvent::find(event_id, args, nostr_client)
+        .await
+        .context("query")?;
 
     let found_on_relays_before_broadcasting = found_on_relays.len();
     if relays_without_event.is_empty() {
@@ -216,12 +220,11 @@ async fn handle_event(
         } else {
             "".to_string()
         };
-        let info = format!(
+        log::info!(
             "{found_message}broadcasting to {} relays (of all of the {} relays)",
             relays_without_event.len(),
             found_on_relays_before_broadcasting.saturating_add(relays_without_event.len()),
         );
-        notice(info, ws_sender).await;
 
         if let Err(e) = nostr_client
             .send_event_to(&relays_without_event, &event)
@@ -332,15 +335,6 @@ async fn ok<S: AsRef<str>>(
     .await;
 }
 
-async fn notice<S: AsRef<str>>(
-    message: S,
-    ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
-) {
-    let message = message.as_ref();
-    log::debug!("notice: {message}");
-    let _ = send_relay_message(RelayMessage::Notice(Cow::Borrowed(message)), ws_sender).await;
-}
-
 async fn closed<S: AsRef<str>>(
     subscription_id: Cow<'_, SubscriptionId>,
     message: S,
@@ -377,8 +371,12 @@ async fn send_relay_message(
     message: RelayMessage<'_>,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
 ) -> ah::Result<()> {
-    let text = Message::Text(serde_json::to_string(&message)?.into());
-    ws_sender.send(text).await?;
+    let text = Message::Text(
+        serde_json::to_string(&message)
+            .context("relay_message")?
+            .into(),
+    );
+    ws_sender.send(text).await.context("ws_sender.send")?;
     Ok(())
 }
 
