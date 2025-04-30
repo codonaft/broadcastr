@@ -1,4 +1,5 @@
 # Broadcastr
+[![Made for Nostr](https://img.shields.io/badge/Nostr-enabled-purple?logo=nostr&logoColor=white)](https://github.com/nostr-protocol)
 [![Crates.io](https://img.shields.io/crates/v/broadcastr)](https://crates.io/crates/broadcastr)
 [![Crates.io](https://img.shields.io/crates/d/broadcastr)](https://crates.io/crates/broadcastr)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2.svg?&logo=github&logoColor=white&labelColor=181717&style=flat-square)](#Support)
@@ -9,8 +10,28 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
     - kind
     - author/mention
     - [PoW](https://github.com/nostr-protocol/nips/blob/master/13.md)
-- gossip
-- tor relays
+- [gossip](https://github.com/frnandu/yana/blob/master/GOSSIP.md)
+- tor/onion relays
+- minimizes the risk of being rate-limited by the relay
+    - it checks whether event is already published on a certain relay
+- relays ignore list
+
+## Install
+
+### From crates.io
+```bash
+cargo install --locked broadcastr
+```
+
+### From git
+```bash
+cargo install --locked --force --git https://github.com/codonaft/broadcastr
+```
+
+## Run
+```
+broadcastr --listen ws://localhost:8080 --relays https://api.nostr.watch/v1/online
+```
 
 <details>
 <summary><b>💡 Usage 👁️</b></summary>
@@ -59,22 +80,12 @@ Options:
 </p>
 </details>
 
-## Install
-
-### From crates.io
-```bash
-cargo install --locked broadcastr
-```
-
-### From git
-```bash
-cargo install --locked --force --git https://github.com/codonaft/broadcastr
-```
-
-## Run
-```
-broadcastr --listen ws://localhost:8080 --relays https://api.nostr.watch/v1/online
-```
+## TODO
+- [ ] support delivery of multiple events over the same connection
+- [ ] deduplicate concurrently sent events
+- [ ] NIP-11
+- [ ] improve RAM usage
+- [ ] add metrics
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.
