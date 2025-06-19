@@ -38,7 +38,7 @@ struct Broadcastr {
     listen: Url,
 
     /// relays or relay-list URIs
-    /// (comma-separated, e.g. "https://api.nostr.watch/v1/online,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
+    /// (comma-separated, e.g. "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
     #[argh(option)]
     relays: Urls,
 

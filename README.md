@@ -30,7 +30,7 @@ cargo install --locked --force --git https://github.com/codonaft/broadcastr
 
 ## Run
 ```
-broadcastr --listen ws://localhost:8080 --relays https://api.nostr.watch/v1/online
+broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json
 ```
 
 <details>
@@ -45,7 +45,7 @@ Broadcast Nostr events to other relays
 Options:
   --listen          the listener ws URI (e.g. "ws://localhost:8080")
   --relays          relays or relay-list URIs (comma-separated, e.g.
-                    "https://api.nostr.watch/v1/online,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
+                    "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
   --blocked-relays  same, but for ignored relays; put public URL to your
                     broadcastr here to avoid loops
   --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
