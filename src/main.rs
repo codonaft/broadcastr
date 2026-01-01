@@ -114,7 +114,7 @@ struct Broadcastr {
     max_msg_size: usize,
 
     /// ws frame size
-    #[argh(option, default = "(MAX_EVENT_SIZE as usize * 4)")]
+    #[argh(option, default = "MAX_EVENT_SIZE as usize * 4")]
     max_frame_size: usize,
 }
 

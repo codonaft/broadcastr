@@ -381,10 +381,10 @@ async fn send_relay_message(
 }
 
 fn mentioned_pubkey(tag: &Tag) -> Option<PublicKey> {
-    if tag.single_letter_tag() == Some(SingleLetterTag::lowercase(Alphabet::P)) {
-        if let Some(pubkey) = tag.content() {
-            return pubkey.parse().ok();
-        }
+    if tag.single_letter_tag() == Some(SingleLetterTag::lowercase(Alphabet::P))
+        && let Some(pubkey) = tag.content()
+    {
+        return pubkey.parse().ok();
     }
     None
 }
@@ -422,10 +422,10 @@ impl PolicyWithSenders {
 
 impl Policy {
     fn check_event(&self, event: &Event) -> ah::Result<()> {
-        if let Some(min_pow) = self.min_pow {
-            if !event.check_pow(min_pow) {
-                ah::bail!("unexpected pow < {min_pow}");
-            }
+        if let Some(min_pow) = self.min_pow
+            && !event.check_pow(min_pow)
+        {
+            ah::bail!("unexpected pow < {min_pow}");
         }
 
         if !self.allowed_kinds.is_empty() && !self.allowed_kinds.contains(&event.kind) {
