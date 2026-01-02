@@ -2,7 +2,7 @@ use super::Broadcastr;
 use crate::RateLimits;
 use anyhow as ah;
 use anyhow::Context;
-use futures::{SinkExt, StreamExt, TryFutureExt, future::join_all};
+use futures::{SinkExt, StreamExt, future::join_all};
 use futures_util::stream::SplitSink;
 use nostr_sdk::{
     Alphabet, Client as NostrClient, ClientMessage, Event, EventId, Filter, JsonUtil,
@@ -13,7 +13,7 @@ use nostr_sdk::{
 };
 use reqwest::Url;
 use std::{borrow::Cow, collections::HashSet, ops::Sub, str::FromStr, sync::Arc};
-use tokio::{net::TcpStream, sync::watch, time};
+use tokio::{net::TcpStream, sync::watch};
 use tokio_tungstenite::{WebSocketStream, accept_async_with_config, tungstenite::Message};
 use tungstenite::protocol::WebSocketConfig;
 
@@ -67,66 +67,62 @@ pub(crate) async fn handle_ws_connection(
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     let mut broadcasted = None;
-    if let Ok(Some(Ok(Message::Text(text)))) =
-        time::timeout(args.request_timeout.0, ws_receiver.next()).await
-    {
+    while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
         match ClientMessage::from_json(&text) {
             Ok(client_message) => {
                 handle_client_message(
                     client_message,
                     &mut broadcasted,
-                    ws_sender,
+                    &mut ws_sender,
                     &args,
                     &nostr_client,
-                    rate_limits,
-                    policy,
+                    rate_limits.clone(),
+                    policy.clone(),
                 )
                 .await;
+
+                if let Some(BroadcastedEvent {
+                    event_id,
+                    found_on_relays_before_broadcasting,
+                }) = broadcasted
+                {
+                    let QueryEvent {
+                        found_on_relays,
+                        relays_without_event,
+                    } = QueryEvent::find(event_id, &args, &nostr_client)
+                        .await
+                        .context("re-query")?;
+                    let broadcasted_to_new_relays = found_on_relays
+                        .len()
+                        .saturating_sub(found_on_relays_before_broadcasting);
+                    log::info!(
+                        "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now \
+                         it's available on {} of {} relays)",
+                        found_on_relays.len(),
+                        found_on_relays
+                            .len()
+                            .saturating_add(relays_without_event.len()),
+                    );
+                }
             },
             Err(e) => {
                 log::debug!("failed to parse client message: {e}");
             },
         }
-    } else {
-        let _ = ws_sender
-            .close()
-            .await
-            .context("ws_sender.close after failure")
-            .map_err(|e| log::error!("{e}"));
-        return Ok(());
     }
-
-    if let Some(BroadcastedEvent {
-        event_id,
-        found_on_relays_before_broadcasting,
-    }) = broadcasted
-    {
-        let QueryEvent {
-            found_on_relays,
-            relays_without_event,
-        } = QueryEvent::find(event_id, &args, &nostr_client)
-            .await
-            .context("re-query")?;
-        let broadcasted_to_new_relays = found_on_relays
-            .len()
-            .saturating_sub(found_on_relays_before_broadcasting);
-        log::info!(
-            "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now it's \
-             available on {} of {} relays)",
-            found_on_relays.len(),
-            found_on_relays
-                .len()
-                .saturating_add(relays_without_event.len()),
-        );
-    }
-
+    let _ = ws_sender
+        .close()
+        .await
+        .context("ws_sender.close")
+        .map_err(|e| log::error!("{e}"));
+    log::debug!("closed connection with client");
     Ok(())
 }
 
 async fn handle_client_message(
     client_message: ClientMessage<'_>,
     broadcasted: &mut Option<BroadcastedEvent>,
-    mut ws_sender: SplitSink<WebSocketStream<TcpStream>, Message>,
+    ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     args: &Broadcastr,
     nostr_client: &NostrClient,
     rate_limits: Arc<RateLimits>,
@@ -137,27 +133,18 @@ async fn handle_client_message(
         Event(event) => {
             let event_id = event.id;
 
-            tokio::spawn(
-                async move {
-                    ok(event_id, true, "", &mut ws_sender).await;
-                    ws_sender.close().await.context("ws_sender.close")?;
-                    log::debug!("closed connection with client");
-                    Ok::<_, ah::Error>(())
-                }
-                .map_err(|e| log::error!("failed to finalize connection: {e}")),
-            );
+            ok(event_id, true, "", ws_sender).await;
 
             match handle_event(event, args, nostr_client, rate_limits, policy).await {
                 Ok(Some(broadcasted_event)) => {
-                    debug_assert!(broadcasted.is_none());
                     *broadcasted = Some(broadcasted_event);
                 },
                 Ok(None) => (),
                 Err(e) => log::error!("failed to handle a message: {e}"),
             }
         },
-        Close(subscription_id) => closed(subscription_id, "close", &mut ws_sender).await,
-        Auth(event) => ok(event.id, false, "unexpected message", &mut ws_sender).await,
+        Close(subscription_id) => closed(subscription_id, "close", ws_sender).await,
+        Auth(event) => ok(event.id, false, "unexpected message", ws_sender).await,
         Req {
             subscription_id, ..
         }
@@ -166,7 +153,7 @@ async fn handle_client_message(
         }
         | Count {
             subscription_id, ..
-        } => closed(subscription_id, "unexpected message", &mut ws_sender).await,
+        } => closed(subscription_id, "unexpected message", ws_sender).await,
         NegOpen {
             subscription_id, ..
         }
@@ -175,7 +162,7 @@ async fn handle_client_message(
         }
         | NegClose {
             subscription_id, ..
-        } => neg_err(subscription_id, "unexpected message", &mut ws_sender).await,
+        } => neg_err(subscription_id, "unexpected message", ws_sender).await,
     }
 }
 
