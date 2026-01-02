@@ -34,7 +34,6 @@ use tokio::net::TcpListener;
 use tungstenite::protocol::WebSocketConfig;
 
 const MAX_EVENTS_BY_ID: Quota = Quota::per_hour(nonzero!(3u32));
-const MAX_EVENTS_BY_IP: Quota = Quota::per_hour(nonzero!(100u32));
 const MIN_SIZE: usize = 128;
 
 #[derive(FromArgs, Clone, Debug)]
@@ -76,9 +75,13 @@ struct Broadcastr {
     #[argh(switch)]
     disable_mentions: bool,
 
-    /// max events by author per minute (default is 5)
+    /// limit events by author (default is 5)
     #[argh(option, default = "nonzero!(5u32)")]
-    max_events_per_min: NonZeroU32,
+    max_events_by_author_per_min: NonZeroU32,
+
+    /// limit events by IP (default is 50)
+    #[argh(option, default = "nonzero!(50u32)")]
+    max_events_by_ip_per_min: NonZeroU32,
 
     /// limit event kinds with
     /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
@@ -231,9 +234,9 @@ async fn main() -> ah::Result<()> {
     let policy = Arc::new(policy);
 
     let rate_limits = Arc::new(RateLimits {
-        events_by_author: RateLimiter::keyed(Quota::per_minute(args.max_events_per_min)),
+        events_by_author: RateLimiter::keyed(Quota::per_minute(args.max_events_by_author_per_min)),
         events_by_id: RateLimiter::keyed(MAX_EVENTS_BY_ID),
-        events_by_ip: RateLimiter::keyed(MAX_EVENTS_BY_IP),
+        events_by_ip: RateLimiter::keyed(Quota::per_minute(args.max_events_by_ip_per_min)),
     });
     let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
         serve(
