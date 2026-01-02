@@ -13,7 +13,7 @@ use nostr_sdk::{
 };
 use reqwest::{Url, header};
 use std::{borrow::Cow, collections::HashSet, ops::Sub, str::FromStr, sync::Arc};
-use tokio::{net::TcpStream, sync::watch};
+use tokio::{io::AsyncWriteExt, net::TcpStream, sync::watch};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
 use tungstenite::{
     handshake::server::{Request, Response},
@@ -59,13 +59,27 @@ struct BroadcastedEvent {
 }
 
 pub(crate) async fn handle_ws_connection(
-    stream: TcpStream,
+    mut stream: TcpStream,
     ws_config: WebSocketConfig,
     args: Broadcastr,
     nostr_client: NostrClient,
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
 ) -> ah::Result<()> {
+    if !is_ws(&stream).await {
+        let body = "https://github.com/codonaft/broadcastr#readme";
+        let length = body.len();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: \
+             {length}\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n{body}"
+        );
+        stream.write_all(response.as_bytes()).await?;
+        stream.flush().await?;
+        return Ok(());
+    }
+
+    log::debug!("detected ws connection");
+
     let value = "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
         .parse()
         .context("header value")?;
@@ -133,6 +147,24 @@ pub(crate) async fn handle_ws_connection(
     Ok(())
 }
 
+async fn is_ws(stream: &TcpStream) -> bool {
+    let mut buffer = [0u8; 1024];
+    let n = match stream.peek(&mut buffer).await {
+        Ok(n) => n,
+        Err(_) => {
+            return false;
+        },
+    };
+
+    if n == 0 {
+        return false;
+    }
+
+    let request = String::from_utf8_lossy(&buffer[..n]);
+    log::debug!("request {request}");
+    request.to_lowercase().contains("sec-websocket")
+}
+
 async fn handle_client_message(
     client_message: ClientMessage<'_>,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
@@ -161,10 +193,10 @@ async fn handle_client_message(
         }
         | ReqMultiFilter {
             subscription_id, ..
-        }
-        | Count {
+        } => eose(subscription_id, ws_sender).await,
+        Count {
             subscription_id, ..
-        } => closed(subscription_id, "unexpected message", ws_sender).await,
+        } => count(subscription_id, ws_sender).await,
         NegOpen {
             subscription_id, ..
         }
@@ -328,6 +360,29 @@ async fn ok<S: AsRef<str>>(
             event_id,
             status,
             message: Cow::Borrowed(message),
+        },
+        ws_sender,
+    )
+    .await;
+}
+
+async fn eose(
+    subscription_id: Cow<'_, SubscriptionId>,
+    ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
+) {
+    log::debug!("eose");
+    let _ = send_relay_message(RelayMessage::EndOfStoredEvents(subscription_id), ws_sender).await;
+}
+
+async fn count(
+    subscription_id: Cow<'_, SubscriptionId>,
+    ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
+) {
+    log::debug!("count");
+    let _ = send_relay_message(
+        RelayMessage::Count {
+            subscription_id,
+            count: 0,
         },
         ws_sender,
     )
