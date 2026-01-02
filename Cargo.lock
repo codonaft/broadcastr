@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "broadcastr"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "argh",
