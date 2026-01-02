@@ -5,7 +5,7 @@
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2.svg?&logo=github&logoColor=white&labelColor=181717&style=flat-square)](#Support)
 
 Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWallet/blastr) with additional features:
-- [spam](https://spam.nostr.band) filtering
+- spam filtering ([spam.nostr.band](https://spam.nostr.band) and [azzamo.net](https://azzamo.net/introducing-the-azzamo-ban-api))
 - events filtering
     - kind
     - author/mention
@@ -38,7 +38,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-per-min <max-events-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -64,6 +64,7 @@ Options:
   --disable-gossip  don't discover additional relays from user profiles
   --disable-spam-nostr-band
                     don't use spam.nostr.band for spam filtering
+  --disable-azzamo  don't use azzamo.net for spam filtering
   --update-interval relays and spam-lists update interval (default is 15m)
   --max-backoff-interval
                     max update backoff interval (default is 5m)
@@ -81,13 +82,13 @@ Options:
 </details>
 
 ## TODO
-- [x] make it compatible with ordinary clients (it currently works well with `nak`)
+- [x] make it compatible with ordinary clients (besides `nak`)
   - [x] support delivery of multiple events over the same connection
-  - [x] response with `"Vary" "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"` header
-- [x] support https://azzamo.net/introducing-the-azzamo-ban-api
+  - [x] response with `vary` header
+- [x] support azzamo ban api
 - [ ] limit concurrent connections per IP?
 - [ ] deduplicate concurrently sent events
-- [ ] NIP-11
+- [x] NIP-11
 - [ ] improve RAM usage
 - [ ] add metrics
 
