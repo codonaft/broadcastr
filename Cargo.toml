@@ -21,12 +21,12 @@ humantime = "2"
 itertools = "0.14"
 log = "0.4"
 nonzero_ext = "0.3"
-nostr-relay-pool = "0.41"
-nostr-sdk = "0.41"
-reqwest = { version = "0.12", features = ["json"] }
+nostr-relay-pool = "0.44"
+nostr-sdk = "0.44"
+reqwest = { version = "0.13", features = ["json"] }
 serde = "1"
 simplelog = "0.12"
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 tokio = "1"
-tokio-tungstenite = "0.26"
-tungstenite = "0.26"
+tokio-tungstenite = "0.28"
+tungstenite = "0.28"

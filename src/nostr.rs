@@ -65,15 +65,10 @@ pub(crate) async fn handle_ws_connection(
     nostr_client: NostrClient,
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
+    relay_info: String,
 ) -> ah::Result<()> {
     if !is_ws(&stream).await {
-        let body = "https://github.com/codonaft/broadcastr#readme";
-        let length = body.len();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: \
-             {length}\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n{body}"
-        );
-        stream.write_all(response.as_bytes()).await?;
+        stream.write_all(relay_info.as_bytes()).await?;
         stream.flush().await?;
         return Ok(());
     }
@@ -189,9 +184,6 @@ async fn handle_client_message(
         Close(subscription_id) => closed(subscription_id, "close", ws_sender).await,
         Auth(event) => ok(event.id, false, "unexpected message", ws_sender).await,
         Req {
-            subscription_id, ..
-        }
-        | ReqMultiFilter {
             subscription_id, ..
         } => eose(subscription_id, ws_sender).await,
         Count {
@@ -321,7 +313,7 @@ impl QueryEvent {
     ) -> ah::Result<Self> {
         let relay_urls: HashSet<RelayUrl> = nostr_client.relays().await.keys().cloned().collect();
         let found_on_relays: HashSet<RelayUrl> =
-            join_all(relay_urls.iter().cloned().map(|relay_url| async move {
+            join_all(relay_urls.clone().into_iter().map(|relay_url| async move {
                 let filter = Filter::new().ids([event_id]).limit(1);
                 match nostr_client
                     .fetch_events_from([&relay_url], filter, args.request_timeout.0)

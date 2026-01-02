@@ -170,8 +170,7 @@ fn update_azzamo_blocked_pubkeys(
                     .await
             }
             .await
-            .map_err(|e| bf::Error::transient(e.into()))?
-            .into();
+            .map_err(|e| bf::Error::transient(e.into()))?;
 
             log::debug!("azzamo: fetched {}", items.len());
             output

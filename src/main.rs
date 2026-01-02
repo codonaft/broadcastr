@@ -10,13 +10,14 @@ use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKey
 use log::LevelFilter;
 use nonzero_ext::*;
 use nostr::PolicyWithSenders;
-use nostr_relay_pool::{
-    RelayLimits,
-    relay::{constants::MAX_EVENT_SIZE, limits::RelayEventLimits},
-};
+use nostr_relay_pool::{RelayLimits, relay::limits::RelayEventLimits};
 use nostr_sdk::{
-    Client as NostrClient, EventId, Options, PublicKey,
-    client::{Connection, ConnectionTarget},
+    Client as NostrClient, ClientOptions, EventId, JsonUtil, PublicKey,
+    client::{
+        Connection, ConnectionTarget,
+        options::{GossipOptions, GossipRelayLimits},
+    },
+    nips::nip11::RelayInformationDocument,
 };
 use reqwest::Url;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
@@ -114,11 +115,11 @@ struct Broadcastr {
     tcp_backlog: i32,
 
     /// event message size
-    #[argh(option, default = "MAX_EVENT_SIZE as usize")]
+    #[argh(option, default = "70 * 1024")]
     max_msg_size: usize,
 
     /// ws frame size
-    #[argh(option, default = "MAX_EVENT_SIZE as usize * 4")]
+    #[argh(option, default = "4 * 70 * 1024")]
     max_frame_size: usize,
 }
 
@@ -180,8 +181,20 @@ async fn main() -> ah::Result<()> {
         .max_message_size(Some(ws_message_size))
         .max_frame_size(Some(args.max_frame_size as usize));
 
-    let mut opts = Options::new()
-        .gossip(!args.disable_gossip)
+    let mut opts = ClientOptions::new()
+        .gossip(GossipOptions {
+            limits: if args.disable_gossip {
+                GossipRelayLimits {
+                    read_relays_per_user: 0,
+                    write_relays_per_user: 0,
+                    hint_relays_per_user: 0,
+                    most_used_relays_per_user: 0,
+                    nip17_relays: 0,
+                }
+            } else {
+                GossipRelayLimits::default()
+            },
+        })
         .relay_limits(relay_limits);
     let mut connection: Connection = Connection::new();
     opts = if let Some(proxy) = args.proxy {
@@ -250,6 +263,21 @@ async fn serve(
     rate_limits: &Arc<RateLimits>,
     policy: &Arc<nostr::Policy>,
 ) -> ah::Result<()> {
+    let relay_info = {
+        let body = RelayInformationDocument {
+            name: Some("broadcastr".to_string()),
+            software: Some("git+https://github.com/codonaft/broadcastr".to_string()),
+            icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
+            ..Default::default()
+        }
+        .as_json();
+        let length = body.len();
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
+             {length}\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n{body}"
+        )
+    };
+
     loop {
         match listener.accept().await {
             Ok((stream, _client_addr)) => {
@@ -261,6 +289,7 @@ async fn serve(
                         nostr_client.clone(),
                         rate_limits.clone(),
                         policy.clone(),
+                        relay_info.clone(),
                     )
                     .map_err(move |e| {
                         log::info!("failed to handle connection from client: {e}");
