@@ -11,11 +11,14 @@ use nostr_sdk::{
     serde_json,
     util::BoxedFuture,
 };
-use reqwest::Url;
+use reqwest::{Url, header};
 use std::{borrow::Cow, collections::HashSet, ops::Sub, str::FromStr, sync::Arc};
 use tokio::{net::TcpStream, sync::watch};
-use tokio_tungstenite::{WebSocketStream, accept_async_with_config, tungstenite::Message};
-use tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
+use tungstenite::{
+    handshake::server::{Request, Response},
+    protocol::WebSocketConfig,
+};
 
 #[derive(Debug, Clone)]
 pub struct Policy {
@@ -61,11 +64,21 @@ pub(crate) async fn handle_ws_connection(
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
 ) -> ah::Result<()> {
-    let ws_stream = accept_async_with_config(stream, Some(ws_config))
-        .await
-        .context("accept_async_with_config")?;
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+    let value = "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+        .parse()
+        .context("header value")?;
+    let ws_stream = accept_hdr_async_with_config(
+        stream,
+        |_: &Request, mut response: Response| {
+            response.headers_mut().insert(header::VARY, value);
+            Ok(response)
+        },
+        Some(ws_config),
+    )
+    .await
+    .context("accept_async_with_config")?;
 
+    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
         match ClientMessage::from_json(&text) {
             Ok(client_message) => {
@@ -108,6 +121,7 @@ pub(crate) async fn handle_ws_connection(
             },
         }
     }
+
     let _ = ws_sender
         .close()
         .await

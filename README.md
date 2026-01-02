@@ -81,9 +81,9 @@ Options:
 </details>
 
 ## TODO
-- [ ] make it compatible with ordinary clients (it currently works well with `nak`)
+- [x] make it compatible with ordinary clients (it currently works well with `nak`)
   - [x] support delivery of multiple events over the same connection
-  - [ ] response with `"Vary" "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"` header
+  - [x] response with `"Vary" "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"` header
 - [ ] support https://azzamo.net/introducing-the-azzamo-ban-api
 - [ ] limit concurrent connections per IP?
 - [ ] deduplicate concurrently sent events
