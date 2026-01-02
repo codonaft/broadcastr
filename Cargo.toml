@@ -24,6 +24,7 @@ nonzero_ext = "0.3"
 nostr-relay-pool = "0.44"
 nostr-sdk = "0.44"
 reqwest = { version = "0.13", features = ["json"] }
+rustls = { version = "0.23", features = ["ring"] }
 serde = "1"
 simplelog = "0.12"
 socket2 = { version = "0.6", features = ["all"] }

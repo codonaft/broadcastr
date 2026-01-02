@@ -20,6 +20,7 @@ use nostr_sdk::{
     nips::nip11::RelayInformationDocument,
 };
 use reqwest::Url;
+use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
     collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
@@ -148,6 +149,8 @@ async fn main() -> ah::Result<()> {
     )?;
 
     log::info!("starting {:#?}", args);
+
+    let _ = crypto::CryptoProvider::install_default(crypto::ring::default_provider());
 
     if args.proxy.is_some() && args.tor_proxy.is_some() {
         ah::bail!("ambiguous proxy arguments");
