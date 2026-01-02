@@ -4,6 +4,7 @@ use anyhow as ah;
 use anyhow::Context;
 use futures::{SinkExt, StreamExt, future::join_all};
 use futures_util::stream::SplitSink;
+use httparse::Status;
 use nostr_sdk::{
     Alphabet, Client as NostrClient, ClientMessage, Event, EventId, Filter, JsonUtil,
     Kind as EventKind, PublicKey, RelayMessage, RelayUrl, SingleLetterTag, SubscriptionId, Tag,
@@ -12,7 +13,7 @@ use nostr_sdk::{
     util::BoxedFuture,
 };
 use reqwest::{Url, header};
-use std::{borrow::Cow, collections::HashSet, ops::Sub, str::FromStr, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, net::IpAddr, ops::Sub, str::FromStr, sync::Arc};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::watch};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
 use tungstenite::{
@@ -67,7 +68,8 @@ pub(crate) async fn handle_ws_connection(
     policy: Arc<Policy>,
     relay_info: String,
 ) -> ah::Result<()> {
-    if !is_ws(&stream).await {
+    let ParsedHttpHeaders { ws, ip } = parse_http_headers(&stream).await;
+    if !ws {
         stream.write_all(relay_info.as_bytes()).await?;
         stream.flush().await?;
         return Ok(());
@@ -95,6 +97,7 @@ pub(crate) async fn handle_ws_connection(
             Ok(client_message) => {
                 let broadcasted = handle_client_message(
                     client_message,
+                    ip,
                     &mut ws_sender,
                     &args,
                     &nostr_client,
@@ -142,26 +145,47 @@ pub(crate) async fn handle_ws_connection(
     Ok(())
 }
 
-async fn is_ws(stream: &TcpStream) -> bool {
-    let mut buffer = [0u8; 1024];
-    let n = match stream.peek(&mut buffer).await {
-        Ok(n) => n,
-        Err(_) => {
-            return false;
-        },
-    };
+#[derive(Default, Debug)]
+struct ParsedHttpHeaders {
+    ws: bool,
+    ip: Option<IpAddr>,
+}
 
-    if n == 0 {
-        return false;
+async fn parse_http_headers(stream: &TcpStream) -> ParsedHttpHeaders {
+    let mut buffer = [0u8; 1024];
+    let _ = stream.peek(&mut buffer).await;
+
+    let mut result = ParsedHttpHeaders::default();
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut request = httparse::Request::new(&mut headers);
+    if let Ok(Status::Partial) = request.parse(&buffer) {
+        log::error!("too many request headers");
     }
 
-    let request = String::from_utf8_lossy(&buffer[..n]);
-    log::debug!("request {request}");
-    request.to_lowercase().contains("sec-websocket")
+    for i in request.headers {
+        if i.name.is_empty() {
+            break;
+        }
+        let header = i.name.to_lowercase();
+        let header = header.trim();
+        if header.contains("sec-websocket") {
+            result.ws = true;
+        } else if ["x-forwarded-for", "x-real-ip"].contains(&header)
+            && let Some(value) = str::from_utf8(i.value)
+                .ok()
+                .and_then(|v| v.split(',').next())
+        {
+            result.ip = value.trim().parse().ok();
+        }
+    }
+
+    log::debug!("parsed headers {:?}", result);
+    result
 }
 
 async fn handle_client_message(
     client_message: ClientMessage<'_>,
+    ip: Option<IpAddr>,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     args: &Broadcastr,
     nostr_client: &NostrClient,
@@ -175,7 +199,7 @@ async fn handle_client_message(
 
             ok(event_id, true, "", ws_sender).await;
 
-            match handle_event(event, args, nostr_client, rate_limits, policy).await {
+            match handle_event(event, ip, args, nostr_client, rate_limits, policy).await {
                 Ok(Some(broadcasted_event)) => return Some(broadcasted_event),
                 Ok(None) => (),
                 Err(e) => log::error!("failed to handle a message: {e}"),
@@ -204,6 +228,7 @@ async fn handle_client_message(
 
 async fn handle_event(
     event: Cow<'_, Event>,
+    ip: Option<IpAddr>,
     args: &Broadcastr,
     nostr_client: &NostrClient,
     rate_limits: Arc<RateLimits>,
@@ -221,6 +246,11 @@ async fn handle_event(
     }
     if rate_limits.events_by_id.check_key(&event_id).is_err() {
         ah::bail!("rate-limit: too many attempts to transmit the same event");
+    }
+    if let Some(ip) = ip
+        && rate_limits.events_by_ip.check_key(&ip).is_err()
+    {
+        ah::bail!("rate-limit: too many events from the same IP");
     }
     log::debug!("received event {event_id}");
 

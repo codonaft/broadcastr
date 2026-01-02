@@ -23,12 +23,18 @@ use reqwest::Url;
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
-    collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
+    collections::HashSet,
+    net::{IpAddr, SocketAddr},
+    num::NonZeroU32,
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
 };
 use tokio::net::TcpListener;
 use tungstenite::protocol::WebSocketConfig;
 
 const MAX_EVENTS_BY_ID: Quota = Quota::per_hour(nonzero!(3u32));
+const MAX_EVENTS_BY_IP: Quota = Quota::per_hour(nonzero!(100u32));
 const MIN_SIZE: usize = 128;
 
 #[derive(FromArgs, Clone, Debug)]
@@ -128,6 +134,7 @@ struct Broadcastr {
 struct RateLimits {
     events_by_author: RateLimitBy<PublicKey>,
     events_by_id: RateLimitBy<EventId>,
+    events_by_ip: RateLimitBy<IpAddr>,
 }
 
 type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
@@ -226,6 +233,7 @@ async fn main() -> ah::Result<()> {
     let rate_limits = Arc::new(RateLimits {
         events_by_author: RateLimiter::keyed(Quota::per_minute(args.max_events_per_min)),
         events_by_id: RateLimiter::keyed(MAX_EVENTS_BY_ID),
+        events_by_ip: RateLimiter::keyed(MAX_EVENTS_BY_IP),
     });
     let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
         serve(

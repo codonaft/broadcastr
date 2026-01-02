@@ -86,7 +86,7 @@ Options:
   - [x] support delivery of multiple events over the same connection
   - [x] response with `vary` header
 - [x] support azzamo ban api
-- [ ] limit concurrent connections per IP?
+- [x] rate-limit by IP
 - [ ] deduplicate concurrently sent events
 - [x] NIP-11
 - [ ] improve RAM usage
