@@ -66,13 +66,11 @@ pub(crate) async fn handle_ws_connection(
         .context("accept_async_with_config")?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    let mut broadcasted = None;
     while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
         match ClientMessage::from_json(&text) {
             Ok(client_message) => {
-                handle_client_message(
+                let broadcasted = handle_client_message(
                     client_message,
-                    &mut broadcasted,
                     &mut ws_sender,
                     &args,
                     &nostr_client,
@@ -121,13 +119,12 @@ pub(crate) async fn handle_ws_connection(
 
 async fn handle_client_message(
     client_message: ClientMessage<'_>,
-    broadcasted: &mut Option<BroadcastedEvent>,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     args: &Broadcastr,
     nostr_client: &NostrClient,
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
-) {
+) -> Option<BroadcastedEvent> {
     use ClientMessage::*;
     match client_message {
         Event(event) => {
@@ -136,9 +133,7 @@ async fn handle_client_message(
             ok(event_id, true, "", ws_sender).await;
 
             match handle_event(event, args, nostr_client, rate_limits, policy).await {
-                Ok(Some(broadcasted_event)) => {
-                    *broadcasted = Some(broadcasted_event);
-                },
+                Ok(Some(broadcasted_event)) => return Some(broadcasted_event),
                 Ok(None) => (),
                 Err(e) => log::error!("failed to handle a message: {e}"),
             }
@@ -164,6 +159,7 @@ async fn handle_client_message(
             subscription_id, ..
         } => neg_err(subscription_id, "unexpected message", ws_sender).await,
     }
+    None
 }
 
 async fn handle_event(
