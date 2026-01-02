@@ -523,7 +523,7 @@ impl Policy {
         }
 
         if self.is_spam(event) {
-            ah::bail!("listed on spam.nostr.band");
+            ah::bail!("listed as spam");
         }
         Ok(())
     }
