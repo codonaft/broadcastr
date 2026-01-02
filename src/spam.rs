@@ -8,7 +8,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use tokio::{sync::watch, task::JoinHandle, time};
 
-pub(crate) async fn updater(
+pub(crate) async fn spam_nostr_band_updater(
     args: &Broadcastr,
     spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
     spam_events_sender: watch::Sender<HashSet<EventId>>,
@@ -20,19 +20,38 @@ pub(crate) async fn updater(
     let mut interval = time::interval(args.update_interval.0);
     loop {
         interval.tick().await;
-        if let Err(e) = update_lists(
+        if let Err(e) = update_spam_nostr_band_lists(
             args.clone(),
             spam_pubkeys_sender.clone(),
             spam_events_sender.clone(),
         )
         .await
         {
-            log::error!("failed to update spam lists: {e}");
+            log::error!("failed to update spam nostr band lists: {e}");
         }
     }
 }
 
-async fn update_lists(
+pub(crate) async fn azzamo_updater(
+    args: &Broadcastr,
+    spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
+) -> ah::Result<()> {
+    if args.disable_azzamo {
+        return Ok(());
+    }
+
+    let mut interval = time::interval(args.update_interval.0);
+    loop {
+        interval.tick().await;
+        if let Err(e) =
+            update_azzamo_blocked_pubkeys(args.clone(), spam_pubkeys_sender.clone()).await
+        {
+            log::error!("failed to update azzamo blocked pubkeys: {e}");
+        }
+    }
+}
+
+async fn update_spam_nostr_band_lists(
     args: Broadcastr,
     spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
     spam_events_sender: watch::Sender<HashSet<EventId>>,
@@ -78,8 +97,12 @@ async fn update_lists(
     }
 
     join_all([
-        fetch_list::<Pubkeys, PublicKey>(args.clone(), spam_pubkeys_sender, "pubkeys"),
-        fetch_list::<Events, EventId>(args, spam_events_sender, "events"),
+        fetch_spam_nostr_band_list::<Pubkeys, PublicKey>(
+            args.clone(),
+            spam_pubkeys_sender,
+            "pubkeys",
+        ),
+        fetch_spam_nostr_band_list::<Events, EventId>(args, spam_events_sender, "events"),
     ])
     .await
     .into_iter()
@@ -89,7 +112,7 @@ async fn update_lists(
     Ok(())
 }
 
-fn fetch_list<Input: DeserializeOwned, Output>(
+fn fetch_spam_nostr_band_list<Input: DeserializeOwned, Output>(
     args: Broadcastr,
     output: watch::Sender<HashSet<Output>>,
     view: &'static str,
@@ -121,6 +144,36 @@ where
             .into();
 
             log::debug!("spam.nostr.band: fetched {} {view}", items.len());
+            output
+                .send(items)
+                .map_err(|e| bf::Error::transient(e.into()))?;
+            Result::<_, bf::Error<ah::Error>>::Ok(())
+        }
+    }))
+}
+
+fn update_azzamo_blocked_pubkeys(
+    args: Broadcastr,
+    output: watch::Sender<HashSet<PublicKey>>,
+) -> JoinHandle<ah::Result<()>> {
+    tokio::spawn(bf::future::retry(backoff(&args), move || {
+        let output = output.clone();
+        async move {
+            let items: HashSet<_> = async move {
+                ClientBuilder::new()
+                    .timeout(args.request_timeout.0)
+                    .build()?
+                    .get("https://ban-api.azzamo.net/public/blocked/pubkeys")
+                    .send()
+                    .await?
+                    .json::<HashSet<_>>()
+                    .await
+            }
+            .await
+            .map_err(|e| bf::Error::transient(e.into()))?
+            .into();
+
+            log::debug!("azzamo: fetched {}", items.len());
             output
                 .send(items)
                 .map_err(|e| bf::Error::transient(e.into()))?;

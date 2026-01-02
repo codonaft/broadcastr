@@ -85,6 +85,10 @@ struct Broadcastr {
     #[argh(switch)]
     disable_spam_nostr_band: bool,
 
+    /// don't use azzamo.net for spam filtering
+    #[argh(switch)]
+    disable_azzamo: bool,
+
     /// relays and spam-lists update interval (default is 15m)
     #[argh(option, default = "DurationArg(Duration::from_secs(15 * 60))")]
     update_interval: DurationArg,
@@ -195,6 +199,7 @@ async fn main() -> ah::Result<()> {
         blocked_relays_sender,
         spam_pubkeys_sender,
         spam_events_sender,
+        azzamo_blocked_pubkeys_sender,
     } = nostr::PolicyWithSenders::new(&args)?;
     let nostr_client = NostrClient::builder()
         .opts(opts)
@@ -221,7 +226,8 @@ async fn main() -> ah::Result<()> {
     if let Err(e) = try_join_all(
         [
             relays::updater(blocked_relays_sender, &args, &nostr_client).boxed(),
-            spam::updater(&args, spam_pubkeys_sender, spam_events_sender).boxed(),
+            spam::spam_nostr_band_updater(&args, spam_pubkeys_sender, spam_events_sender).boxed(),
+            spam::azzamo_updater(&args, azzamo_blocked_pubkeys_sender).boxed(),
         ]
         .into_iter()
         .chain(listeners),

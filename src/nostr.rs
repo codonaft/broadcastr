@@ -29,6 +29,7 @@ pub struct Policy {
     blocked_relays_receiver: watch::Receiver<HashSet<Url>>,
     spam_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
     spam_events_receiver: watch::Receiver<HashSet<EventId>>,
+    azzamo_blocked_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
 }
 
 pub(crate) struct PolicyWithSenders {
@@ -36,6 +37,7 @@ pub(crate) struct PolicyWithSenders {
     pub blocked_relays_sender: watch::Sender<HashSet<Url>>,
     pub spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
     pub spam_events_sender: watch::Sender<HashSet<EventId>>,
+    pub azzamo_blocked_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -391,6 +393,8 @@ impl PolicyWithSenders {
         let (blocked_relays_sender, blocked_relays_receiver) = watch::channel(HashSet::default());
         let (spam_pubkeys_sender, spam_pubkeys_receiver) = watch::channel(HashSet::default());
         let (spam_events_sender, spam_events_receiver) = watch::channel(HashSet::default());
+        let (azzamo_blocked_pubkeys_sender, azzamo_blocked_pubkeys_receiver) =
+            watch::channel(HashSet::default());
         let policy = Policy {
             allowed_pubkeys: args.allowed_pubkeys.clone().unwrap_or_default().0,
             disable_mentions: args.disable_mentions,
@@ -399,6 +403,7 @@ impl PolicyWithSenders {
             blocked_relays_receiver,
             spam_pubkeys_receiver,
             spam_events_receiver,
+            azzamo_blocked_pubkeys_receiver,
         };
 
         if policy.disable_mentions && policy.allowed_pubkeys.is_empty() {
@@ -413,6 +418,7 @@ impl PolicyWithSenders {
             blocked_relays_sender,
             spam_pubkeys_sender,
             spam_events_sender,
+            azzamo_blocked_pubkeys_sender,
         })
     }
 }
@@ -456,6 +462,10 @@ impl Policy {
     fn is_spam(&self, event: &Event) -> bool {
         self.spam_pubkeys_receiver.borrow().contains(&event.pubkey)
             || self.spam_events_receiver.borrow().contains(&event.id)
+            || self
+                .azzamo_blocked_pubkeys_receiver
+                .borrow()
+                .contains(&event.pubkey)
     }
 }
 
