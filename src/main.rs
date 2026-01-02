@@ -278,6 +278,7 @@ async fn serve(
         let body = RelayInformationDocument {
             name: Some("broadcastr".to_string()),
             software: Some("git+https://github.com/codonaft/broadcastr".to_string()),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
             icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
             ..Default::default()
         }
