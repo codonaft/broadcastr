@@ -121,7 +121,7 @@ where
     HashSet<Output>: From<Input>,
     Output: Send + Sync + 'static,
 {
-    tokio::spawn(bf::future::retry(backoff(&args), move || {
+    spawn_and_backoff(&args, move || {
         let output = output.clone();
         async move {
             let url = Url::parse_with_params(
@@ -147,16 +147,16 @@ where
             output
                 .send(items)
                 .map_err(|e| bf::Error::transient(e.into()))?;
-            Result::<_, bf::Error<ah::Error>>::Ok(())
+            Ok(())
         }
-    }))
+    })
 }
 
 fn update_azzamo_blocked_pubkeys(
     args: Broadcastr,
     output: watch::Sender<HashSet<PublicKey>>,
 ) -> JoinHandle<ah::Result<()>> {
-    tokio::spawn(bf::future::retry(backoff(&args), move || {
+    spawn_and_backoff(&args, move || {
         let output = output.clone();
         async move {
             let items: HashSet<_> = async move {
@@ -176,7 +176,15 @@ fn update_azzamo_blocked_pubkeys(
             output
                 .send(items)
                 .map_err(|e| bf::Error::transient(e.into()))?;
-            Result::<_, bf::Error<ah::Error>>::Ok(())
+            Ok(())
         }
-    }))
+    })
+}
+
+fn spawn_and_backoff<F, Fut>(args: &Broadcastr, f: F) -> JoinHandle<Result<(), ah::Error>>
+where
+    Fut: Future<Output = Result<(), bf::Error<ah::Error>>> + Send + 'static,
+    F: Fn() -> Fut + Send + 'static,
+{
+    tokio::spawn(bf::future::retry(backoff(args), f))
 }
