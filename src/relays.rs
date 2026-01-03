@@ -1,6 +1,5 @@
-use super::{Broadcastr, backoff, normalize_url};
+use super::{Broadcastr, normalize_url, retry_with_backoff};
 use anyhow as ah;
-use backoff::{self as bf};
 use futures::future::try_join_all;
 use nostr_sdk::{Client as NostrClient, serde_json};
 use reqwest::{ClientBuilder, Url};
@@ -20,11 +19,11 @@ pub(crate) async fn updater(
     let mut interval = time::interval(args.update_interval.0);
     loop {
         interval.tick().await;
-        bf::future::retry(backoff(args), || {
+        retry_with_backoff(args.clone(), || {
             let blocked_relays_sender = blocked_relays_sender.clone();
             let args = args.clone();
             let nostr_client = nostr_client.clone();
-            async move {
+            async {
                 let result = update_relays(blocked_relays_sender, &args, &nostr_client).await;
                 if let Err(e) = &result {
                     log::error!("failed to update relays: {e}");

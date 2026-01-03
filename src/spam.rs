@@ -1,4 +1,4 @@
-use super::{Broadcastr, backoff};
+use super::{Broadcastr, retry_with_backoff};
 use anyhow as ah;
 use backoff::{self as bf};
 use futures::future::join_all;
@@ -121,27 +121,19 @@ where
     HashSet<Output>: From<Input>,
     Output: Send + Sync + 'static,
 {
-    spawn_and_backoff(&args, move || {
+    let fetch = move || {
         let output = output.clone();
+        let client = ClientBuilder::new().timeout(args.request_timeout.0).build();
         async move {
             let url = Url::parse_with_params(
                 "https://spam.nostr.band/spam_api?method=get_current_spam",
                 &[("view", view)],
             )
             .map_err(|e| bf::Error::transient(e.into()))?;
-            let items: HashSet<_> = async move {
-                ClientBuilder::new()
-                    .timeout(args.request_timeout.0)
-                    .build()?
-                    .get(url)
-                    .send()
-                    .await?
-                    .json::<Input>()
-                    .await
-            }
-            .await
-            .map_err(|e| bf::Error::transient(e.into()))?
-            .into();
+            let items: HashSet<_> = async { client?.get(url).send().await?.json::<Input>().await }
+                .await
+                .map_err(|e| bf::Error::transient(e.into()))?
+                .into();
 
             log::debug!("spam.nostr.band: fetched {} {view}", items.len());
             output
@@ -149,20 +141,20 @@ where
                 .map_err(|e| bf::Error::transient(e.into()))?;
             Ok(())
         }
-    })
+    };
+    tokio::spawn(retry_with_backoff(args, fetch))
 }
 
 fn update_azzamo_blocked_pubkeys(
     args: Broadcastr,
     output: watch::Sender<HashSet<PublicKey>>,
 ) -> JoinHandle<ah::Result<()>> {
-    spawn_and_backoff(&args, move || {
+    let fetch = move || {
         let output = output.clone();
+        let client = ClientBuilder::new().timeout(args.request_timeout.0).build();
         async move {
-            let items: HashSet<_> = async move {
-                ClientBuilder::new()
-                    .timeout(args.request_timeout.0)
-                    .build()?
+            let items = async {
+                client?
                     .get("https://ban-api.azzamo.net/public/blocked/pubkeys")
                     .send()
                     .await?
@@ -178,13 +170,6 @@ fn update_azzamo_blocked_pubkeys(
                 .map_err(|e| bf::Error::transient(e.into()))?;
             Ok(())
         }
-    })
-}
-
-fn spawn_and_backoff<F, Fut>(args: &Broadcastr, f: F) -> JoinHandle<Result<(), ah::Error>>
-where
-    Fut: Future<Output = Result<(), bf::Error<ah::Error>>> + Send + 'static,
-    F: Fn() -> Fut + Send + 'static,
-{
-    tokio::spawn(bf::future::retry(backoff(args), f))
+    };
+    tokio::spawn(retry_with_backoff(args, fetch))
 }

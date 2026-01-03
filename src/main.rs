@@ -4,7 +4,10 @@ mod spam;
 
 use anyhow as ah;
 use argh::FromArgs;
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
+use backoff::{
+    self as bf, ExponentialBackoff, ExponentialBackoffBuilder, Notify,
+    future::{Retry, Sleeper},
+};
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use log::LevelFilter;
@@ -372,11 +375,19 @@ fn normalize_url(mut url: Url) -> ah::Result<Url> {
     Ok(url)
 }
 
-fn backoff(args: &Broadcastr) -> ExponentialBackoff {
-    ExponentialBackoffBuilder::new()
+fn retry_with_backoff<F, Fut>(
+    args: Broadcastr,
+    f: F,
+) -> Retry<impl Sleeper, ExponentialBackoff, impl Notify<ah::Error>, F, Fut>
+where
+    Fut: Future<Output = Result<(), bf::Error<ah::Error>>> + Send,
+    F: Fn() -> Fut + Send,
+{
+    let backoff = ExponentialBackoffBuilder::new()
         .with_max_elapsed_time(None)
         .with_max_interval(args.max_backoff_interval.0)
-        .build()
+        .build();
+    bf::future::retry(backoff, f)
 }
 
 impl FromStr for Urls {

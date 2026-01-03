@@ -22,7 +22,7 @@ use tungstenite::{
 };
 
 #[derive(Debug, Clone)]
-pub struct Policy {
+pub(crate) struct Policy {
     allowed_pubkeys: HashSet<PublicKey>,
     disable_mentions: bool,
     allowed_kinds: HashSet<EventKind>,
