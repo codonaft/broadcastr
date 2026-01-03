@@ -34,6 +34,7 @@ use std::{
     time::Duration,
 };
 use tokio::net::TcpListener;
+use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tungstenite::protocol::WebSocketConfig;
 
 const MAX_EVENTS_BY_ID: Quota = Quota::per_hour(nonzero!(3u32));
@@ -235,40 +236,69 @@ async fn main() -> ah::Result<()> {
         .admit_policy(policy.clone())
         .build();
     let policy = Arc::new(policy);
-
     let rate_limits = Arc::new(RateLimits {
         events_by_author: RateLimiter::keyed(Quota::per_minute(args.max_events_by_author_per_min)),
         events_by_id: RateLimiter::keyed(MAX_EVENTS_BY_ID),
         events_by_ip: RateLimiter::keyed(Quota::per_minute(args.max_events_by_ip_per_min)),
     });
-    let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
-        serve(
-            listener,
-            ws_config,
-            &args,
-            &nostr_client,
-            &rate_limits,
-            &policy,
-        )
-        .boxed()
-    });
 
-    if let Err(e) = try_join_all(
-        [
-            relays::updater(blocked_relays_sender, &args, &nostr_client).boxed(),
-            spam::spam_nostr_band_updater(&args, spam_pubkeys_sender, spam_events_sender).boxed(),
-            spam::azzamo_updater(&args, azzamo_blocked_pubkeys_sender).boxed(),
-        ]
-        .into_iter()
-        .chain(listeners),
-    )
-    .await
-    {
-        log::error!("fatal {e}");
-    }
+    Toplevel::new({
+        async move |s: &mut SubsystemHandle| {
+            s.start(SubsystemBuilder::new("shutdown", {
+                let nostr_client = nostr_client.clone();
+                async move |subsys: &mut SubsystemHandle| {
+                    subsys.on_shutdown_requested().await;
+                    nostr_client.shutdown().await;
+                    log::info!("exiting");
+                    Ok::<_, ah::Error>(())
+                }
+            }));
+            s.start(SubsystemBuilder::new(
+                "main",
+                async move |subsys: &mut SubsystemHandle| {
+                    let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
+                        serve(
+                            listener,
+                            ws_config,
+                            &args,
+                            &nostr_client,
+                            &rate_limits,
+                            &policy,
+                        )
+                        .boxed()
+                    });
 
-    nostr_client.shutdown().await;
-    log::info!("exiting");
+                    if let Err(e) = try_join_all(
+                        [
+                            async {
+                                subsys.on_shutdown_requested().await;
+                                ah::bail!("shutdown");
+                            }
+                            .boxed(),
+                            relays::updater(blocked_relays_sender, &args, &nostr_client).boxed(),
+                            spam::spam_nostr_band_updater(
+                                &args,
+                                spam_pubkeys_sender,
+                                spam_events_sender,
+                            )
+                            .boxed(),
+                            spam::azzamo_updater(&args, azzamo_blocked_pubkeys_sender).boxed(),
+                        ]
+                        .into_iter()
+                        .chain(listeners),
+                    )
+                    .await
+                    {
+                        log::error!("{e}");
+                    }
+                    Ok::<_, ah::Error>(())
+                },
+            ));
+        }
+    })
+    .catch_signals()
+    .handle_shutdown_requests(Duration::from_millis(5000))
+    .await?;
     Ok(())
 }
 

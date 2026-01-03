@@ -30,5 +30,6 @@ serde = "1"
 simplelog = "0.12"
 socket2 = { version = "0.6", features = ["all"] }
 tokio = "1"
+tokio-graceful-shutdown = "0.19"
 tokio-tungstenite = "0.28"
 tungstenite = "0.28"
