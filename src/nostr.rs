@@ -53,10 +53,10 @@ struct QueryEvent {
     relays_without_event: HashSet<RelayUrl>,
 }
 
-#[derive(Debug)]
-struct BroadcastedEvent {
-    event_id: EventId,
-    found_on_relays_before_broadcasting: usize,
+#[derive(Default, Debug)]
+struct ParsedHttpHeaders {
+    ws: bool,
+    ip: Option<IpAddr>,
 }
 
 pub(crate) async fn handle_ws_connection(
@@ -95,40 +95,16 @@ pub(crate) async fn handle_ws_connection(
     while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
         match ClientMessage::from_json(&text) {
             Ok(client_message) => {
-                let broadcasted = handle_client_message(
+                handle_client_message(
                     client_message,
                     ip,
                     &mut ws_sender,
-                    &args,
-                    &nostr_client,
+                    args.clone(),
+                    nostr_client.clone(),
                     rate_limits.clone(),
                     policy.clone(),
                 )
                 .await;
-
-                if let Some(BroadcastedEvent {
-                    event_id,
-                    found_on_relays_before_broadcasting,
-                }) = broadcasted
-                {
-                    let QueryEvent {
-                        found_on_relays,
-                        relays_without_event,
-                    } = QueryEvent::find(event_id, &args, &nostr_client)
-                        .await
-                        .context("re-query")?;
-                    let broadcasted_to_new_relays = found_on_relays
-                        .len()
-                        .saturating_sub(found_on_relays_before_broadcasting);
-                    log::info!(
-                        "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now \
-                         it's available on {} of {} relays)",
-                        found_on_relays.len(),
-                        found_on_relays
-                            .len()
-                            .saturating_add(relays_without_event.len()),
-                    );
-                }
             },
             Err(e) => {
                 log::debug!("failed to parse client message: {e}");
@@ -143,12 +119,6 @@ pub(crate) async fn handle_ws_connection(
         .map_err(|e| log::error!("{e}"));
     log::debug!("closed connection with client");
     Ok(())
-}
-
-#[derive(Default, Debug)]
-struct ParsedHttpHeaders {
-    ws: bool,
-    ip: Option<IpAddr>,
 }
 
 async fn parse_http_headers(stream: &TcpStream) -> ParsedHttpHeaders {
@@ -187,23 +157,32 @@ async fn handle_client_message(
     client_message: ClientMessage<'_>,
     ip: Option<IpAddr>,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
-    args: &Broadcastr,
-    nostr_client: &NostrClient,
+    args: Broadcastr,
+    nostr_client: NostrClient,
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
-) -> Option<BroadcastedEvent> {
+) {
     use ClientMessage::*;
     match client_message {
         Event(event) => {
+            let event = event.into_owned();
+            let (success, message) = match check_event_acceptance(&event, ip, rate_limits, policy) {
+                Ok(()) => (true, "".to_string()),
+                Err(e) => (false, format!("{e}")),
+            };
+
             let event_id = event.id;
-
-            ok(event_id, true, "", ws_sender).await;
-
-            match handle_event(event, ip, args, nostr_client, rate_limits, policy).await {
-                Ok(Some(broadcasted_event)) => return Some(broadcasted_event),
-                Ok(None) => (),
-                Err(e) => log::error!("failed to handle a message: {e}"),
+            ok(event_id, success, &message, ws_sender).await;
+            if !success {
+                log::error!("event {event_id} not accepted by broadcastr: {message}");
+                return;
             }
+
+            tokio::spawn(async move {
+                if let Err(e) = handle_event(event, args, nostr_client).await {
+                    log::error!("failed to handle a message: {e}");
+                }
+            });
         },
         Close(subscription_id) => closed(subscription_id, "close", ws_sender).await,
         Auth(event) => ok(event.id, false, "unexpected message", ws_sender).await,
@@ -223,20 +202,16 @@ async fn handle_client_message(
             subscription_id, ..
         } => neg_err(subscription_id, "unexpected message", ws_sender).await,
     }
-    None
 }
 
-async fn handle_event(
-    event: Cow<'_, Event>,
+fn check_event_acceptance(
+    event: &Event,
     ip: Option<IpAddr>,
-    args: &Broadcastr,
-    nostr_client: &NostrClient,
     rate_limits: Arc<RateLimits>,
     policy: Arc<Policy>,
-) -> ah::Result<Option<BroadcastedEvent>> {
-    policy.check_event(&event)?;
-
+) -> ah::Result<()> {
     let event_id = event.id;
+    policy.check_event(event)?;
     if rate_limits
         .events_by_author
         .check_key(&event.pubkey)
@@ -253,11 +228,15 @@ async fn handle_event(
         ah::bail!("rate-limit: too many events from the same IP");
     }
     log::debug!("received event {event_id}");
+    Ok(())
+}
 
+async fn handle_event(event: Event, args: Broadcastr, nostr_client: NostrClient) -> ah::Result<()> {
+    let event_id = event.id;
     let QueryEvent {
         found_on_relays,
         relays_without_event,
-    } = QueryEvent::find(event_id, args, nostr_client)
+    } = QueryEvent::find(event_id, &args, &nostr_client)
         .await
         .context("query")?;
 
@@ -285,13 +264,26 @@ async fn handle_event(
         {
             log::error!("failed to broadcast event {event_id}: {e}");
         } else {
-            return Ok(Some(BroadcastedEvent {
-                event_id,
-                found_on_relays_before_broadcasting,
-            }));
+            let QueryEvent {
+                found_on_relays,
+                relays_without_event,
+            } = QueryEvent::find(event_id, &args, &nostr_client)
+                .await
+                .context("re-query")?;
+            let broadcasted_to_new_relays = found_on_relays
+                .len()
+                .saturating_sub(found_on_relays_before_broadcasting);
+            log::info!(
+                "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now it's \
+                 available on {} of {} relays)",
+                found_on_relays.len(),
+                found_on_relays
+                    .len()
+                    .saturating_add(relays_without_event.len()),
+            );
         }
     }
-    Ok(None)
+    Ok(())
 }
 
 impl AdmitPolicy for Policy {
@@ -453,6 +445,7 @@ async fn send_relay_message(
             .into(),
     );
     ws_sender.send(text).await.context("ws_sender.send")?;
+    ws_sender.flush().await?;
     Ok(())
 }
 
