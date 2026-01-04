@@ -10,7 +10,7 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
     - kind
     - author/mention
     - [PoW](https://github.com/nostr-protocol/nips/blob/master/13.md)
-- [gossip](https://github.com/frnandu/yana/blob/master/GOSSIP.md)
+- [gossip](https://mikedilger.com/gossip-model/)
 - tor/onion relays
 - minimizes the risk of being rate-limited by the relay
     - it checks whether event is already published on a certain relay
