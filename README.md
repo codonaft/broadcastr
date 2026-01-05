@@ -16,6 +16,8 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
     - it checks whether event is already published on a certain relay
 - relays ignore list
 
+[Changelogs](https://codonaft.com/broadcastr).
+
 ## Install
 
 ### From crates.io
