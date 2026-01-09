@@ -297,7 +297,7 @@ async fn main() -> ah::Result<()> {
         }
     })
     .catch_signals()
-    .handle_shutdown_requests(Duration::from_millis(2000))
+    .handle_shutdown_requests(Duration::from_millis(4000))
     .await?;
     Ok(())
 }
