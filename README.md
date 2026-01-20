@@ -90,8 +90,13 @@ Options:
   - [x] support delivery of multiple events over the same connection
   - [x] response with `vary` header
 - [x] support azzamo ban api
-- [x] rate-limit by IP
+- [ ] use client IP (requires `X-Forwarded-For` or `X-Real-IP` request header in your reverse proxy)
+    - [x] rate-limit
+    - [ ] allow-list (which overrides pubkeys allow-list)
+- [ ] use follower list as allow-list
+- [ ] relays fetching: process errors separately per provider
 - [ ] deduplicate concurrently sent events
+- [ ] optionally proxy REQ requests to a list of relays
 - [x] NIP-11
 - [ ] improve RAM usage
 - [ ] add metrics
