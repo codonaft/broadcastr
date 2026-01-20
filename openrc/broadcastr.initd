@@ -6,6 +6,7 @@ command="/usr/local/bin/${name}"
 command_user="nobody:nobody"
 command_background="true"
 command_args="${broadcastr_args}"
+retry="10"
 
 pidfile="/run/${name}.pid"
 output_logger="logger"
