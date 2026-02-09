@@ -108,6 +108,7 @@ pub(crate) async fn handle_ws_connection(
             },
             Err(e) => {
                 log::debug!("failed to parse client message: {e}");
+                break;
             },
         }
     }
