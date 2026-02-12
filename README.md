@@ -97,6 +97,7 @@ Options:
 - [ ] relays fetching: process errors separately per provider
 - [ ] deduplicate concurrently sent events
 - [ ] optionally proxy REQ requests to a list of relays
+    - add GET option `broadcast=true` to actually broadcast events?
 - [x] NIP-11
 - [ ] improve RAM usage
 - [ ] add metrics
