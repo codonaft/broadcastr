@@ -2,6 +2,7 @@
 [![Made for Nostr](https://img.shields.io/badge/Nostr-enabled-purple?logo=nostr&logoColor=white)](https://github.com/nostr-protocol)
 [![Crates.io](https://img.shields.io/crates/v/broadcastr)](https://crates.io/crates/broadcastr)
 [![Crates.io](https://img.shields.io/crates/d/broadcastr)](https://crates.io/crates/broadcastr)
+[![Dependency Status](https://deps.rs/repo/github/codonaft/broadcastr/status.svg)](https://deps.rs/repo/github/codonaft/broadcastr)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2.svg?&logo=github&logoColor=white&labelColor=181717&style=flat-square)](#Support)
 
 Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWallet/blastr) with additional features:
