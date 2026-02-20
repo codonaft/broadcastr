@@ -10,7 +10,7 @@ env:
   RUSTFLAGS: "--deny warnings --warn bare-trait-objects"
   STABLE_VERSION: "1.93.1"
   NIGHTLY_VERSION: "nightly-2025-08-18"
-  ZIG_VERSION: "0.13.0"
+  ZIG_VERSION: "0.14.1"
 
 jobs:
   all:
@@ -28,32 +28,101 @@ jobs:
             tomlfmt: true
             udeps: true
           #- os: ubuntu-latest
-          #  target: x86_64-unknown-linux-musl
+          #  target: x86_64-unknown-linux-musl # NOTE: Error loading shared library libgcc_s.so.1: No such file or directory
           #- os: ubuntu-latest
-          #  target: aarch64-unknown-linux-gnu # NOTE: Relocations in generic ELF (EM: 183)
-          #  zigbuild: true
+          #  target: i686-unknown-linux-gnu # NOTE: cargo: error while loading shared libraries: libatomic.so.1: cannot open shared object file: No such file or directory
+          #  no_build_tests: true # NOTE: ld: cannot find Scrt1.o: No such file or directory
+          #  no_release_build: true # NOTE: ld: cannot find Scrt1.o: No such file or directory
+          #  #zigbuild: true # NOTE: Failed to read build.zig.zon (using latest): Error: ENOENT: no such file or directory, open 'build.zig.zon'
           #- os: ubuntu-latest
-          #  target: aarch64-unknown-linux-musl # NOTE: Relocations in generic ELF (EM: 183)
-          #  zigbuild: true
+          #  target: riscv64gc-unknown-linux-gnu # NOTE: cargo: 1: Syntax error: Unterminated quoted string
+          #  no_build_tests: true # NOTE: Relocations in generic ELF (EM: 243)
+          #  no_release_build: true # NOTE: Relocations in generic ELF (EM: 243)
+          #  #zigbuild: true # NOTE: tests linking fail with "error: unknown directive .cfi_label .Ldummy"
+          # - os: ubuntu-latest
+          #   target: i686-unknown-linux-musl # NOTE: target 'i686-unknown-linux-musl' not found in channel
+          #- os: ubuntu-latest
+          #  target: aarch64-unknown-linux-gnu # NOTE: cargo: 16: Syntax error: word unexpected (expecting ")")
+          #  no_build_tests: true
+          #  no_release_build: true # NOTE: Relocations in generic ELF (EM: 183)
+          #  #zigbuild: true # NOTE: Failed to read build.zig.zon (using latest): Error: ENOENT: no such file or directory, open 'build.zig.zon'
+          #- os: ubuntu-latest
+          #  target: aarch64-unknown-linux-musl # NOTE: cargo: 1: Syntax error: word unexpected (expecting ")")
+          #  no_build_tests: true # NOTE: Relocations in generic ELF (EM: 183)
+          #  no_release_build: true # NOTE: Relocations in generic ELF (EM: 183)
+          #  #zigbuild: true # NOTE: Failed to read build.zig.zon (using latest): Error: ENOENT: no such file or directory, open 'build.zig.zon'
+          # - os: ubuntu-latest
+          #   target: riscv64gc-unknown-linux-musl # NOTE: error: target 'riscv64gc-unknown-linux-musl' not found in channel.
 
           # macOS
           - os: macos-latest
             target: x86_64-apple-darwin
+            audit: true
           - os: macos-latest
             target: aarch64-apple-darwin
-            no_run_tests: true # NOTE: Bad CPU type in executable (os error 86)
+            audit: true
 
           # Windows
           - os: windows-latest
             target: x86_64-pc-windows-gnu
+          #- os: windows-latest
+          #  target: x86_64-pc-windows-gnu
+          #  zigbuild: true # NOTE: failed to link with LLD: UnableToWriteArchive
           - os: windows-latest
             target: x86_64-pc-windows-msvc
           #- os: windows-latest
-          #  target: aarch64-pc-windows-msvc
+          #  target: i686-pc-windows-msvc # NOTE: process didn't exit successfully: `D:\a\broadcastr\broadcastr\target\debug\build\aws-lc-sys-67a578eb2ac60981\build-script-main` (exit code: 0xc0000139, STATUS_ENTRYPOINT_NOT_FOUND)
+          #- os: windows-latest
+          #  target: i686-pc-windows-gnu # NOTE: process didn't exit successfully: `D:\a\broadcastr\broadcastr\target\debug\build\aws-lc-sys-9f795f50e391645c\build-script-main` (exit code: 0xc0000139, STATUS_ENTRYPOINT_NOT_FOUND)
+          #  no_build_tests: true # NOTE: error: linker `i686-w64-mingw32-gcc` not found
+          #  no_release_build: true # NOTE: error: linker `i686-w64-mingw32-gcc` not found
+          #  #zigbuild: true # NOTE: lld-link: error: undefined symbol: ___register_frame_info
+          #- os: windows-latest
+          #  target: aarch64-pc-windows-msvc # NOTE: error: command failed: 'cargo' Caused by: This version of %1 is not compatible with the version of Windows you're running. Check your computer's system information and then contact the software publisher. (os error 216)
           #  no_build_tests: true # NOTE: could not execute process
           #  #zigbuild: true # NOTE: tests linking fails with "zig.exe: InvalidUtf8 error: UnableToSpawnSelf"
           # - os: windows-latest
           #   target: aarch64-pc-windows-gnullvm # NOTE: can't find crate for `core`
+
+          # FreeBSD
+          #- os: ubuntu-latest
+          #  target: x86_64-unknown-freebsd # 'cargo' Caused by: No such file or directory (os error 2)
+          #  #audit: true # NOTE: 'cargo': No such file or directory (os error 2)
+          #  no_build_tests: true # NOTE: ld: cannot find -lexecinfo: No such file or directory
+          #  no_release_build: true # NOTE: ld: cannot find -lexecinfo: No such file or directory
+          #  #zigbuild: true # NOTE: tests linking fails "unsupported target 'x86_64-unknown-freebsd'"
+          # - os: ubuntu-latest
+          #   target: i686-unknown-freebsd # NOTE: target 'i686-unknown-freebsd' not found in channel
+          # - os: ubuntu-latest
+          #   target: aarch64-unknown-freebsd # NOTE: toolchain ... does not support target 'aarch64-unknown-freebsd'
+          # - os: ubuntu-latest
+          #   target: riscv64gc-unknown-freebsd # NOTE: toolchain ... does not support target 'riscv64gc-unknown-freebsd'
+
+          # NetBSD
+          #- os: ubuntu-latest # 'cargo' Caused by: No such file or directory (os error 2)
+          #  target: x86_64-unknown-netbsd
+          #  #audit: true # NOTE: 'cargo': No such file or directory (os error 2)
+          #  no_build_tests: true # NOTE: ld: cannot find -lexecinfo: No such file or directory
+          #  no_release_build: true # NOTE: ld: cannot find -lexecinfo: No such file or directory
+          #  #zigbuild: true # NOTE: tests linking fails "Error: unsupported target 'x86_64-unknown-netbsd'"
+          # - os: ubuntu-latest
+          #   target: i686-unknown-netbsd # NOTE: toolchain ... does not support target 'i686-unknown-netbsd'
+          # - os: ubuntu-latest
+          #   target: aarch64-unknown-netbsd # NOTE: toolchain ... does not support target 'aarch64-unknown-netbsd'
+          # - os: ubuntu-latest
+          #   target: aarch64_be-unknown-netbsd # NOTE: toolchain ... does not support target 'aarch64_be-unknown-netbsd'
+          # - os: ubuntu-latest
+          #   target: riscv64gc-unknown-netbsd # NOTE: toolchain ... does not support target 'riscv64gc-unknown-netbsd'
+
+          # OpenBSD
+          # - os: ubuntu-latest
+          #   target: x86_64-unknown-openbsd # NOTE: toolchain ... does not support target 'x86_64-unknown-openbsd'
+          # - os: ubuntu-latest
+          #   target: i686-unknown-openbsd # NOTE: toolchain ... does not support target 'i686-unknown-openbsd'
+          # - os: ubuntu-latest
+          #   target: aarch64-unknown-openbsd # NOTE: toolchain ... does not support target 'aarch64-unknown-openbsd'
+          # - os: ubuntu-latest
+          #   target: riscv64gc-unknown-openbsd # NOTE: toolchain ... does not support target 'riscv64gc-unknown-openbsd'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
