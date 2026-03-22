@@ -92,19 +92,29 @@ Options:
   - [x] response with `vary` header
 - [x] support azzamo ban api
 - [ ] use client IP (requires `X-Forwarded-For` or `X-Real-IP` request header in your reverse proxy)
-    - [x] rate-limit
-    - [ ] allow-list (which overrides pubkeys allow-list)
+  - [x] rate-limit
+  - [ ] allow-list (which overrides pubkeys allow-list)
 - [ ] use follower list as allow-list
-- [ ] use REQ filter as allow list?
-    - e.g. allow events that ping a certain npub
+- [ ] use REQ filter as allow-list?
+  - e.g. allow events that ping a certain npub
+    - limit number of `p` tags for events by strangers to avoid spam
 - [ ] relays fetching: process errors separately per provider
 - [ ] deduplicate concurrently sent events
 - [ ] option to subscribe to a certain REQ filter and automatically broadcast such events
+  - with auto added `since`
 - [x] NIP-11
-    - [ ] custom relay info
+  - [ ] custom relay info
 - [ ] custom http page or a redirect
 - [ ] improve RAM usage
+  - run memory profiler
+  - disconnect from relays?
+    - that previousely didn't receive events with the same kind?
+    - that closed connections after we sent them event?
+    - option to disconnect after timeout?
+  - make sure we don't attempt to connect to faulty relays
+    - retry to connect with an exponential backoff?
 - [ ] add metrics
+- [ ] socks5/http proxy for all connections?
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.
