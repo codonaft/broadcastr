@@ -80,6 +80,9 @@ pub(crate) async fn handle_ws_connection(
     let value = "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
         .parse()
         .context("header value")?;
+
+    // false positive?
+    #[allow(clippy::result_large_err)]
     let ws_stream = accept_hdr_async_with_config(
         stream,
         |_: &Request, mut response: Response| {
