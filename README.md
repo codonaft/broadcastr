@@ -95,11 +95,14 @@ Options:
     - [x] rate-limit
     - [ ] allow-list (which overrides pubkeys allow-list)
 - [ ] use follower list as allow-list
+- [ ] use REQ filter as allow list?
+    - e.g. allow events that ping a certain npub
 - [ ] relays fetching: process errors separately per provider
 - [ ] deduplicate concurrently sent events
-- [ ] optionally proxy REQ requests to a list of relays
-    - add GET option `broadcast=true` to actually broadcast events?
+- [ ] option to subscribe to a certain REQ filter and automatically broadcast such events
 - [x] NIP-11
+    - [ ] custom relay info
+- [ ] custom http page or a redirect
 - [ ] improve RAM usage
 - [ ] add metrics
 
