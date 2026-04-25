@@ -3,6 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/broadcastr)](https://crates.io/crates/broadcastr)
 [![Crates.io](https://img.shields.io/crates/d/broadcastr)](https://crates.io/crates/broadcastr)
 [![Dependency Status](https://deps.rs/repo/github/codonaft/broadcastr/status.svg)](https://deps.rs/repo/github/codonaft/broadcastr)
+[![Awesome](https://gist.githubusercontent.com/alopatindev/56009d77564991c5474197f3aba85670/raw/cc4370f645d7ad40defcf8d1d14025dfa8726fd2/awesome.svg)](https://github.com/aljazceru/awesome-nostr)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2.svg?&logo=github&logoColor=white&labelColor=181717&style=flat-square)](#Support)
 
 Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWallet/blastr) with additional features:
@@ -101,9 +102,11 @@ Options:
 - [ ] relays fetching: process errors separately per provider
 - [ ] deduplicate concurrently sent events
 - [ ] option to subscribe to a certain REQ filter and automatically broadcast such events
-  - with auto added `since`
+  - with auto added `authors` and `since`
+  - don't disconnect from relays specified in `10002` of the allowed npubs, keep reading from them?
 - [x] NIP-11
   - [ ] custom relay info
+  - [ ] make it work behind reverse proxy
 - [ ] custom http page or a redirect
 - [ ] improve RAM usage
   - run memory profiler
@@ -115,6 +118,9 @@ Options:
     - retry to connect with an exponential backoff?
 - [ ] add metrics
 - [ ] socks5/http proxy for all connections?
+- [ ] remove `spam.nostr.band`?
+- ~~login to NIP-42 relays?~~
+  - does it make sense transmitting someone else's events from a generated `nsec`?
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.
