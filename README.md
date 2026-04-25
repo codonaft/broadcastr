@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allowed-kinds <allowed-kinds>] [--disable-gossip] [--disable-spam-nostr-band] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allowed-kinds <allowed-kinds>] [--subscribe] [--disable-gossip] [--disable-spam-nostr-band] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -67,6 +67,8 @@ Options:
                     limit events by IP (default is 50)
   --allowed-kinds   limit event kinds with (comma-separated allow-list, e.g
                     "0,1,3,5,6,7,4550,34550")
+  --subscribe       subscribe and automatically distribute events of the allowed
+                    authors and kinds
   --disable-gossip  don't discover additional relays from user profiles
   --disable-spam-nostr-band
                     don't use spam.nostr.band for spam filtering
@@ -100,10 +102,10 @@ Options:
   - e.g. allow events that ping a certain npub
     - limit number of `p` tags for events by strangers to avoid spam
 - [ ] relays fetching: process errors separately per provider
-- [ ] deduplicate concurrently sent events
-- [ ] option to subscribe to a certain REQ filter and automatically broadcast such events
+- [x] deduplicate concurrently sent events
+- [x] option to subscribe to a certain REQ filter and automatically broadcast such events
   - with auto added `authors` and `since`
-  - don't disconnect from relays specified in `10002` of the allowed npubs, keep reading from them?
+  - ~~don't disconnect from relays specified in `10002` of the allowed npubs, keep reading from them?~~
 - [x] NIP-11
   - [ ] custom relay info
   - [ ] make it work behind reverse proxy

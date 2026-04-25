@@ -1,4 +1,5 @@
 mod nostr;
+mod policy;
 mod relays;
 mod spam;
 
@@ -9,35 +10,28 @@ use backoff::{
     future::{Retry, Sleeper},
 };
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
-use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::PolicyWithSenders;
 use nostr_relay_pool::{RelayLimits, relay::limits::RelayEventLimits};
 use nostr_sdk::{
-    Client as NostrClient, ClientOptions, EventId, JsonUtil, PublicKey,
+    Client as NostrClient, ClientOptions, JsonUtil,
     client::{
         Connection, ConnectionTarget,
         options::{GossipOptions, GossipRelayLimits},
     },
     nips::nip11::RelayInformationDocument,
 };
+use policy::{ClientAndPolicy, Policy};
 use reqwest::Url;
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
-    collections::HashSet,
-    net::{IpAddr, SocketAddr},
-    num::NonZeroU32,
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
+    collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
 };
 use tokio::net::TcpListener;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tungstenite::protocol::WebSocketConfig;
 
-const MAX_EVENTS_BY_ID: Quota = Quota::per_hour(nonzero!(3u32));
 const MIN_SIZE: usize = 128;
 
 #[derive(FromArgs, Clone, Debug)]
@@ -92,6 +86,10 @@ struct Broadcastr {
     #[argh(option)]
     allowed_kinds: Option<nostr::EventKinds>,
 
+    /// subscribe and automatically distribute events of the allowed authors and kinds
+    #[argh(switch)]
+    subscribe: bool,
+
     /// don't discover additional relays from user profiles
     #[argh(switch)]
     disable_gossip: bool,
@@ -137,15 +135,6 @@ struct Broadcastr {
     max_frame_size: usize,
 }
 
-#[derive(Debug)]
-struct RateLimits {
-    events_by_author: RateLimitBy<PublicKey>,
-    events_by_id: RateLimitBy<EventId>,
-    events_by_ip: RateLimitBy<IpAddr>,
-}
-
-type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
-
 #[derive(Debug, Clone, Default)]
 struct Urls(HashSet<Url>);
 
@@ -161,6 +150,10 @@ async fn main() -> ah::Result<()> {
         TerminalMode::Stderr,
         ColorChoice::Auto,
     )?;
+
+    if args.subscribe && (args.allowed_pubkeys.is_none() || args.allowed_kinds.is_none()) {
+        ah::bail!("--allowed-pubkeys and --allowed-kinds are required for --subscribe");
+    }
 
     log::info!("starting {:#?}", args);
 
@@ -224,23 +217,14 @@ async fn main() -> ah::Result<()> {
         opts
     };
 
-    let PolicyWithSenders {
+    let ClientAndPolicy {
+        nostr_client,
         policy,
         blocked_relays_sender,
         spam_pubkeys_sender,
         spam_events_sender,
         azzamo_blocked_pubkeys_sender,
-    } = nostr::PolicyWithSenders::new(&args)?;
-    let nostr_client = NostrClient::builder()
-        .opts(opts)
-        .admit_policy(policy.clone())
-        .build();
-    let policy = Arc::new(policy);
-    let rate_limits = Arc::new(RateLimits {
-        events_by_author: RateLimiter::keyed(Quota::per_minute(args.max_events_by_author_per_min)),
-        events_by_id: RateLimiter::keyed(MAX_EVENTS_BY_ID),
-        events_by_ip: RateLimiter::keyed(Quota::per_minute(args.max_events_by_ip_per_min)),
-    });
+    } = ClientAndPolicy::new(&args, opts)?;
 
     Toplevel::new({
         async move |s: &mut SubsystemHandle| {
@@ -257,15 +241,7 @@ async fn main() -> ah::Result<()> {
                 "main",
                 async move |subsys: &mut SubsystemHandle| {
                     let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
-                        serve(
-                            listener,
-                            ws_config,
-                            &args,
-                            &nostr_client,
-                            &rate_limits,
-                            &policy,
-                        )
-                        .boxed()
+                        serve(listener, ws_config, &args, &nostr_client, &policy).boxed()
                     });
 
                     if let Err(e) = try_join_all(
@@ -275,7 +251,8 @@ async fn main() -> ah::Result<()> {
                                 ah::bail!("shutdown");
                             }
                             .boxed(),
-                            relays::updater(blocked_relays_sender, &args, &nostr_client).boxed(),
+                            relays::updater(blocked_relays_sender, &args, &nostr_client, &policy)
+                                .boxed(),
                             spam::spam_nostr_band_updater(
                                 &args,
                                 spam_pubkeys_sender,
@@ -307,8 +284,7 @@ async fn serve(
     ws_config: WebSocketConfig,
     args: &Broadcastr,
     nostr_client: &NostrClient,
-    rate_limits: &Arc<RateLimits>,
-    policy: &Arc<nostr::Policy>,
+    policy: &Arc<Policy>,
 ) -> ah::Result<()> {
     let relay_info = {
         let body = RelayInformationDocument {
@@ -335,7 +311,6 @@ async fn serve(
                         ws_config,
                         args.clone(),
                         nostr_client.clone(),
-                        rate_limits.clone(),
                         policy.clone(),
                         relay_info.clone(),
                     )
