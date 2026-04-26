@@ -24,8 +24,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::RwLock;
-use tokio::{sync::watch, time};
+use tokio::{
+    sync::{RwLock, watch},
+    time,
+};
 
 #[derive(Debug)]
 struct QueryEvent {

@@ -9,13 +9,14 @@ use backoff::{
     self as bf, ExponentialBackoff, ExponentialBackoffBuilder, Notify,
     future::{Retry, Sleeper},
 };
+use const_format::concatcp;
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
+use git_version::git_version;
 use log::LevelFilter;
 use nonzero_ext::*;
 use nostr_relay_pool::{RelayLimits, relay::limits::RelayEventLimits};
-use nostr_sdk::RelayUrl;
 use nostr_sdk::{
-    Client as NostrClient, ClientOptions, JsonUtil,
+    Client as NostrClient, ClientOptions, JsonUtil, RelayUrl,
     client::{
         Connection, ConnectionTarget,
         options::{GossipOptions, GossipRelayLimits},
@@ -29,8 +30,7 @@ use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
     collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
 };
-use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::{net::TcpListener, sync::RwLock};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tungstenite::protocol::WebSocketConfig;
 
@@ -302,7 +302,7 @@ async fn serve(
         let body = RelayInformationDocument {
             name: Some("broadcastr".to_string()),
             software: Some("git+https://github.com/codonaft/broadcastr".to_string()),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            version: Some(concatcp!(env!("CARGO_PKG_VERSION"), '-', git_version!()).to_string()),
             icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
             ..Default::default()
         }
