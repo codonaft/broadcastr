@@ -92,10 +92,15 @@ impl Policy {
     pub(crate) async fn check(&self, event: &Event, ip: Option<IpAddr>) -> ah::Result<()> {
         let event_id = event.id;
 
-        if self.seen_event_ids.read().await.contains(&event_id) {
-            ah::bail!("rate-limit: too many attempts to transmit the same event");
+        {
+            if self.seen_event_ids.read().await.contains(&event_id) {
+                ah::bail!("rate-limit: too many attempts to transmit the same event");
+            }
         }
-        self.seen_event_ids.write().await.put(event_id, ());
+
+        {
+            self.seen_event_ids.write().await.put(event_id, ());
+        }
 
         self.policy.check_event(event)?;
 

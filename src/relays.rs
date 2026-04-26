@@ -169,8 +169,13 @@ async fn update_connections(args: &Broadcastr, nostr_client: &NostrClient) {
         .filter(|(_, relay)| !relay.is_connected())
         .map(|(url, _)| url.to_string())
         .collect::<Vec<_>>();
+    let ignored = client_relays
+        .values()
+        .filter(|i| i.status() == RelayStatus::Banned)
+        .count();
     log::info!(
-        "currently connected to {connected_relays}/{} relays, disconnected from {}",
+        "currently connected to {connected_relays}/{} relays, disconnected from {}, {ignored} \
+         ignored",
         client_relays.len(),
         disconnected_relays.len(),
     );
@@ -353,16 +358,24 @@ async fn ignore_relays_without_our_events(
     dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
 ) {
     join_all(relays_without_event.into_iter().map(async |relay_url| {
-        if dont_ignore_relays.read().await.contains(&relay_url) {
-            return Ok(());
+        {
+            if dont_ignore_relays.read().await.contains(&relay_url) {
+                return Ok(());
+            }
         }
 
         let relay = nostr_client.relay(&relay_url).await?;
-        if relay.status() == RelayStatus::Banned {
+        let status = relay.status();
+        if [RelayStatus::Banned, RelayStatus::Terminated]
+            .into_iter()
+            .any(|i| status == i)
+        {
             return Ok(());
         }
 
-        let client = ClientBuilder::new().timeout(args.request_timeout.0).build();
+        let client = ClientBuilder::new()
+            .timeout(args.request_timeout.0)
+            .build()?;
         let mut url = relay_url.as_str().parse::<Url>()?;
         url.set_scheme(match url.scheme() {
             "ws" => "http",
@@ -370,11 +383,35 @@ async fn ignore_relays_without_our_events(
             _ => bail!("unexpected scheme"),
         })
         .map_err(|e| ah::anyhow!("{e:?}"))?;
-        let info = client?
+
+        let info = client
             .get(url)
             .header(reqwest::header::ACCEPT, "application/nostr+json")
             .send()
-            .await?
+            .await;
+
+        if let Err(e) = &info {
+            let text = format!("{e:?}");
+            log::debug!("failed to retrieve relay info for {relay_url}: {text}");
+            if [
+                "dns error",
+                "InvalidCertificate",
+                "ExpiredContext",
+                "UnrecognisedName",
+                "NotValidForNameContext",
+                "tls handshake eof",
+                "0.0.0.0:443",
+            ]
+            .iter()
+            .any(|i| text.contains(i))
+            {
+                log::debug!("ignore {relay_url}");
+                relay.ban();
+                return Ok(());
+            }
+        }
+
+        let info = info?
             .json::<RelayInformationDocument>()
             .await
             .map_err(|e| ah::anyhow!("{e:?}"))?;
@@ -422,7 +459,9 @@ async fn ignore_relays_without_our_events(
             }
         }
 
-        dont_ignore_relays.write().await.insert(relay_url);
+        {
+            dont_ignore_relays.write().await.insert(relay_url);
+        }
         Ok::<_, ah::Error>(())
     }))
     .await;
