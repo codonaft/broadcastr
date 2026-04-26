@@ -13,6 +13,7 @@ use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use log::LevelFilter;
 use nonzero_ext::*;
 use nostr_relay_pool::{RelayLimits, relay::limits::RelayEventLimits};
+use nostr_sdk::RelayUrl;
 use nostr_sdk::{
     Client as NostrClient, ClientOptions, JsonUtil,
     client::{
@@ -29,6 +30,7 @@ use std::{
     collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
 };
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tungstenite::protocol::WebSocketConfig;
 
@@ -224,6 +226,9 @@ async fn main() -> ah::Result<()> {
         azzamo_blocked_pubkeys_sender,
     } = ClientAndPolicy::new(&args, opts)?;
 
+    let dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>> =
+        Arc::new(RwLock::new(HashSet::default()));
+
     Toplevel::new({
         async move |s: &mut SubsystemHandle| {
             s.start(SubsystemBuilder::new("shutdown", {
@@ -239,7 +244,15 @@ async fn main() -> ah::Result<()> {
                 "main",
                 async move |subsys: &mut SubsystemHandle| {
                     let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
-                        serve(listener, ws_config, &args, &nostr_client, &policy).boxed()
+                        serve(
+                            listener,
+                            ws_config,
+                            &args,
+                            &nostr_client,
+                            &policy,
+                            &dont_ignore_relays,
+                        )
+                        .boxed()
                     });
 
                     if let Err(e) = try_join_all(
@@ -249,8 +262,14 @@ async fn main() -> ah::Result<()> {
                                 ah::bail!("shutdown");
                             }
                             .boxed(),
-                            relays::updater(blocked_relays_sender, &args, &nostr_client, &policy)
-                                .boxed(),
+                            relays::updater(
+                                blocked_relays_sender,
+                                &args,
+                                &nostr_client,
+                                &policy,
+                                &dont_ignore_relays,
+                            )
+                            .boxed(),
                             spam::azzamo_updater(&args, azzamo_blocked_pubkeys_sender).boxed(),
                         ]
                         .into_iter()
@@ -277,6 +296,7 @@ async fn serve(
     args: &Broadcastr,
     nostr_client: &NostrClient,
     policy: &Arc<Policy>,
+    dont_ignore_relays: &Arc<RwLock<HashSet<RelayUrl>>>,
 ) -> ah::Result<()> {
     let relay_info = {
         let body = RelayInformationDocument {
@@ -304,6 +324,7 @@ async fn serve(
                         args.clone(),
                         nostr_client.clone(),
                         policy.clone(),
+                        dont_ignore_relays.clone(),
                         relay_info.clone(),
                     )
                     .map_err(move |e| {

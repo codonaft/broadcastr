@@ -5,12 +5,14 @@ use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use futures_util::stream::SplitSink;
 use httparse::Status;
+use nostr_sdk::RelayUrl;
 use nostr_sdk::{
     Client as NostrClient, ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey,
     RelayMessage, SubscriptionId, serde_json,
 };
 use reqwest::header;
 use std::{borrow::Cow, collections::HashSet, net::IpAddr, str::FromStr, sync::Arc};
+use tokio::sync::RwLock;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
 use tungstenite::{
@@ -36,6 +38,7 @@ pub(crate) async fn handle_ws_connection(
     args: Broadcastr,
     nostr_client: NostrClient,
     policy: Arc<Policy>,
+    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
     relay_info: String,
 ) -> ah::Result<()> {
     let ParsedHttpHeaders { ws, ip } = parse_http_headers(&stream).await;
@@ -75,6 +78,7 @@ pub(crate) async fn handle_ws_connection(
                     args.clone(),
                     nostr_client.clone(),
                     policy.clone(),
+                    dont_ignore_relays.clone(),
                 )
                 .await;
             },
@@ -133,17 +137,27 @@ async fn handle_client_message(
     args: Broadcastr,
     nostr_client: NostrClient,
     policy: Arc<Policy>,
+    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
 ) {
     use ClientMessage::*;
     match client_message {
         Event(event) => {
             let event = event.into_owned();
             let event_id = event.id;
-            let (success, message) =
-                match spawn_handle_event(&args, &nostr_client, event, ip, policy, false).await {
-                    Ok(()) => (true, "".to_string()),
-                    Err(e) => (false, format!("{e}")),
-                };
+            let (success, message) = match spawn_handle_event(
+                &args,
+                &nostr_client,
+                event,
+                ip,
+                policy,
+                dont_ignore_relays,
+                false,
+            )
+            .await
+            {
+                Ok(()) => (true, "".to_string()),
+                Err(e) => (false, format!("{e}")),
+            };
             ok(event_id, success, &message, ws_sender).await;
         },
         Close(subscription_id) => closed(subscription_id, "close", ws_sender).await,

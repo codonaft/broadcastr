@@ -24,6 +24,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use tokio::sync::RwLock;
 use tokio::{sync::watch, time};
 
 #[derive(Debug)]
@@ -37,6 +38,7 @@ pub(crate) async fn updater(
     args: &Broadcastr,
     nostr_client: &NostrClient,
     policy: &Arc<Policy>,
+    dont_ignore_relays: &Arc<RwLock<HashSet<RelayUrl>>>,
 ) -> ah::Result<()> {
     let mut interval = time::interval(args.update_interval.0);
     loop {
@@ -51,7 +53,13 @@ pub(crate) async fn updater(
                     log::error!("failed to update relays: {e}");
                 }
                 update_connections(&args, &nostr_client).await;
-                update_subscription(args, nostr_client, policy.clone()).await?;
+                update_subscription(
+                    args,
+                    nostr_client,
+                    policy.clone(),
+                    dont_ignore_relays.clone(),
+                )
+                .await?;
                 Ok(result?)
             }
         })
@@ -171,6 +179,7 @@ async fn update_subscription(
     args: Broadcastr,
     nostr_client: NostrClient,
     policy: Arc<Policy>,
+    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
 ) -> ah::Result<()> {
     if !args.subscribe {
         return Ok(());
@@ -212,9 +221,16 @@ async fn update_subscription(
                     .any(|i| i.match_event(&event, MatchEventOptions::default()))
                 {
                     log::debug!("received event {} from subscription", event.id);
-                    let _ =
-                        spawn_handle_event(&args, &nostr_client, event, None, policy.clone(), true)
-                            .await;
+                    let _ = spawn_handle_event(
+                        &args,
+                        &nostr_client,
+                        event,
+                        None,
+                        policy.clone(),
+                        dont_ignore_relays.clone(),
+                        true,
+                    )
+                    .await;
                 }
             }
 
@@ -234,6 +250,7 @@ pub(crate) async fn spawn_handle_event(
     event: Event,
     ip: Option<IpAddr>,
     policy: Arc<Policy>,
+    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
     silent: bool,
 ) -> ah::Result<()> {
     let result = policy.check(&event, ip).await;
@@ -248,8 +265,9 @@ pub(crate) async fn spawn_handle_event(
     let args = args.clone();
     let nostr_client = nostr_client.clone();
     let policy = policy.clone();
+    let dont_ignore_relays = dont_ignore_relays.clone();
     tokio::spawn(async move {
-        if let Err(e) = handle_event(event, args, nostr_client, policy).await {
+        if let Err(e) = handle_event(event, args, nostr_client, policy, dont_ignore_relays).await {
             log::error!("failed to handle a message: {e}");
         }
     });
@@ -262,6 +280,7 @@ async fn handle_event(
     args: Broadcastr,
     nostr_client: NostrClient,
     policy: Arc<Policy>,
+    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
 ) -> ah::Result<()> {
     let event_id = event.id;
     let QueryEvent {
@@ -313,7 +332,13 @@ async fn handle_event(
                     .len()
                     .saturating_add(relays_without_event.len()),
             );
-            ignore_relays_without_our_events(args, nostr_client, relays_without_event).await;
+            ignore_relays_without_our_events(
+                args,
+                nostr_client,
+                relays_without_event,
+                dont_ignore_relays,
+            )
+            .await;
         }
     }
     Ok(())
@@ -323,8 +348,13 @@ async fn ignore_relays_without_our_events(
     args: Broadcastr,
     nostr_client: NostrClient,
     relays_without_event: HashSet<RelayUrl>,
+    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
 ) {
     join_all(relays_without_event.into_iter().map(async |relay_url| {
+        if dont_ignore_relays.read().await.contains(&relay_url) {
+            return Ok(());
+        }
+
         let relay = nostr_client.relay(&relay_url).await?;
         if relay.status() == RelayStatus::Banned {
             return Ok(());
@@ -354,6 +384,7 @@ async fn ignore_relays_without_our_events(
         {
             log::debug!("ignore {relay_url} due to auth requirement");
             relay.ban();
+            return Ok(());
         }
 
         if let (
@@ -385,9 +416,11 @@ async fn ignore_relays_without_our_events(
             if !found {
                 log::debug!("ignore {relay_url} due to payment requirement and no events found");
                 relay.ban();
+                return Ok(());
             }
         }
 
+        dont_ignore_relays.write().await.insert(relay_url);
         Ok::<_, ah::Error>(())
     }))
     .await;
