@@ -190,6 +190,8 @@ async fn main() -> ah::Result<()> {
         .max_frame_size(Some(args.max_frame_size as usize));
 
     let mut opts = ClientOptions::new()
+        // event signing is not supported
+        .automatic_authentication(false)
         .gossip(GossipOptions {
             limits: if args.disable_gossip {
                 GossipRelayLimits {

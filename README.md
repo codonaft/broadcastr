@@ -114,6 +114,9 @@ Options:
     - that previousely didn't receive events with the same kind?
     - that closed connections after we sent them event?
     - option to disconnect after timeout?
+    - which are NIP-42-only ("auth-required"/"auth failed")
+    - `Relay::ban()` relays that didn't receive the known kinds
+        - unban after encountering new kind or after timeout
   - make sure we don't attempt to connect to faulty relays
     - retry to connect with an exponential backoff?
 - [ ] add metrics

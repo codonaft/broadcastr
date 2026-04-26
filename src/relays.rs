@@ -1,17 +1,18 @@
 use super::{Broadcastr, normalize_url, retry_with_backoff};
 use crate::Policy;
-use anyhow as ah;
-use anyhow::Context;
+use anyhow::{self as ah, Context, bail};
 use futures::{
     StreamExt,
     future::{join_all, try_join_all},
 };
 use nostr_relay_pool::{
-    RelayServiceFlags,
+    RelayServiceFlags, RelayStatus,
     relay::{FlagCheck, ReqExitPolicy},
 };
 use nostr_sdk::{
-    Client as NostrClient, Event, EventId, Filter, RelayUrl, Timestamp, filter::MatchEventOptions,
+    Client as NostrClient, Event, EventId, Filter, RelayUrl, Timestamp,
+    filter::MatchEventOptions,
+    nips::nip11::{Limitation, RelayInformationDocument},
     serde_json,
 };
 use reqwest::{ClientBuilder, Url};
@@ -312,9 +313,51 @@ async fn handle_event(
                     .len()
                     .saturating_add(relays_without_event.len()),
             );
+            ban_auth_relays(args, nostr_client, relays_without_event).await;
         }
     }
     Ok(())
+}
+
+async fn ban_auth_relays(
+    args: Broadcastr,
+    nostr_client: NostrClient,
+    relays_without_event: HashSet<RelayUrl>,
+) {
+    join_all(relays_without_event.into_iter().map(async |relay_url| {
+        let relay = nostr_client.pool().relay(&relay_url).await?;
+        if relay.status() == RelayStatus::Banned {
+            return Ok(());
+        }
+
+        let client = ClientBuilder::new().timeout(args.request_timeout.0).build();
+        let mut url = relay_url.as_str().parse::<Url>()?;
+        url.set_scheme(match url.scheme() {
+            "ws" => "http",
+            "wss" => "https",
+            _ => bail!("unexpected scheme"),
+        })
+        .map_err(|e| ah::anyhow!("{e:?}"))?;
+        let info = client?
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/nostr+json")
+            .send()
+            .await?
+            .json::<RelayInformationDocument>()
+            .await
+            .map_err(|e| ah::anyhow!("{e:?}"))?;
+
+        if let Some(Limitation {
+            auth_required: Some(true),
+            ..
+        }) = info.limitation
+        {
+            log::debug!("ban {relay_url} due to auth requirement");
+            relay.ban();
+        }
+        Ok::<_, ah::Error>(())
+    }))
+    .await;
 }
 
 impl QueryEvent {
