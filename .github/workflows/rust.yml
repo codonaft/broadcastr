@@ -8,8 +8,8 @@ env:
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
   RUSTFLAGS: "--deny warnings --warn bare-trait-objects"
-  STABLE_VERSION: "1.94.0"
-  NIGHTLY_VERSION: "nightly-2026-03-07"
+  STABLE_VERSION: "1.95.0"
+  NIGHTLY_VERSION: "nightly-2026-04-16"
   ZIG_VERSION: "0.14.1"
 
 jobs:
