@@ -7,7 +7,7 @@
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2.svg?&logo=github&logoColor=white&labelColor=181717&style=flat-square)](#Support)
 
 Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWallet/blastr) with additional features:
-- spam filtering ([spam.nostr.band](https://spam.nostr.band) and [azzamo.net](https://azzamo.net/introducing-the-azzamo-ban-api))
+- spam filtering (~~[spam.nostr.band](https://spam.nostr.band)~~ and [azzamo.net](https://azzamo.net/introducing-the-azzamo-ban-api))
 - events filtering
     - kind
     - author/mention
@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allowed-kinds <allowed-kinds>] [--subscribe] [--disable-gossip] [--disable-spam-nostr-band] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allowed-kinds <allowed-kinds>] [--subscribe] [--disable-gossip] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -70,8 +70,6 @@ Options:
   --subscribe       subscribe and automatically distribute events of the allowed
                     authors and kinds
   --disable-gossip  don't discover additional relays from user profiles
-  --disable-spam-nostr-band
-                    don't use spam.nostr.band for spam filtering
   --disable-azzamo  don't use azzamo.net for spam filtering
   --update-interval relays and spam-lists update interval (default is 15m)
   --max-backoff-interval
@@ -120,7 +118,7 @@ Options:
     - retry to connect with an exponential backoff?
 - [ ] add metrics
 - [ ] socks5/http proxy for all connections?
-- [ ] remove `spam.nostr.band`?
+- [x] remove `spam.nostr.band`?
 - ~~login to NIP-42 relays?~~
   - does it make sense transmitting someone else's events from a generated `nsec`?
 

@@ -19,8 +19,6 @@ pub(crate) struct ClientAndPolicy {
     pub nostr_client: NostrClient,
     pub policy: Arc<Policy>,
     pub blocked_relays_sender: watch::Sender<HashSet<Url>>,
-    pub spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
-    pub spam_events_sender: watch::Sender<HashSet<EventId>>,
     pub azzamo_blocked_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 }
 
@@ -39,8 +37,6 @@ struct InnerPolicy {
     allowed_kinds: HashSet<EventKind>,
     min_pow: Option<u8>,
     blocked_relays_receiver: watch::Receiver<HashSet<Url>>,
-    spam_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
-    spam_events_receiver: watch::Receiver<HashSet<EventId>>,
     azzamo_blocked_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
 }
 
@@ -49,8 +45,6 @@ type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
 impl ClientAndPolicy {
     pub(crate) fn new(args: &Broadcastr, opts: ClientOptions) -> ah::Result<Self> {
         let (blocked_relays_sender, blocked_relays_receiver) = watch::channel(HashSet::default());
-        let (spam_pubkeys_sender, spam_pubkeys_receiver) = watch::channel(HashSet::default());
-        let (spam_events_sender, spam_events_receiver) = watch::channel(HashSet::default());
         let (azzamo_blocked_pubkeys_sender, azzamo_blocked_pubkeys_receiver) =
             watch::channel(HashSet::default());
         let policy = InnerPolicy {
@@ -59,8 +53,6 @@ impl ClientAndPolicy {
             allowed_kinds: args.allowed_kinds.clone().unwrap_or_default().0,
             min_pow: args.min_pow,
             blocked_relays_receiver,
-            spam_pubkeys_receiver,
-            spam_events_receiver,
             azzamo_blocked_pubkeys_receiver,
         };
 
@@ -81,8 +73,6 @@ impl ClientAndPolicy {
             nostr_client,
             policy,
             blocked_relays_sender,
-            spam_pubkeys_sender,
-            spam_events_sender,
             azzamo_blocked_pubkeys_sender,
         })
     }
@@ -166,12 +156,9 @@ impl InnerPolicy {
     }
 
     fn is_spam(&self, event: &Event) -> bool {
-        self.spam_pubkeys_receiver.borrow().contains(&event.pubkey)
-            || self.spam_events_receiver.borrow().contains(&event.id)
-            || self
-                .azzamo_blocked_pubkeys_receiver
-                .borrow()
-                .contains(&event.pubkey)
+        self.azzamo_blocked_pubkeys_receiver
+            .borrow()
+            .contains(&event.pubkey)
     }
 }
 

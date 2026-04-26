@@ -94,10 +94,6 @@ struct Broadcastr {
     #[argh(switch)]
     disable_gossip: bool,
 
-    /// don't use spam.nostr.band for spam filtering
-    #[argh(switch)]
-    disable_spam_nostr_band: bool,
-
     /// don't use azzamo.net for spam filtering
     #[argh(switch)]
     disable_azzamo: bool,
@@ -221,8 +217,6 @@ async fn main() -> ah::Result<()> {
         nostr_client,
         policy,
         blocked_relays_sender,
-        spam_pubkeys_sender,
-        spam_events_sender,
         azzamo_blocked_pubkeys_sender,
     } = ClientAndPolicy::new(&args, opts)?;
 
@@ -253,12 +247,6 @@ async fn main() -> ah::Result<()> {
                             .boxed(),
                             relays::updater(blocked_relays_sender, &args, &nostr_client, &policy)
                                 .boxed(),
-                            spam::spam_nostr_band_updater(
-                                &args,
-                                spam_pubkeys_sender,
-                                spam_events_sender,
-                            )
-                            .boxed(),
                             spam::azzamo_updater(&args, azzamo_blocked_pubkeys_sender).boxed(),
                         ]
                         .into_iter()
