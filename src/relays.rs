@@ -1,12 +1,13 @@
-use super::{Broadcastr, normalize_url, retry_with_backoff};
-use crate::Policy;
-use anyhow::{self as ah, Context, bail};
+use super::{Broadcastr, normalize_url, retry_with_backoff_endless};
+use crate::{Policy, retry_with_backoff};
+use anyhow::{self as ah, Context};
+use backoff as bf;
 use futures::{
     StreamExt,
     future::{join_all, try_join_all},
 };
 use nostr_relay_pool::{
-    RelayServiceFlags, RelayStatus,
+    Relay, RelayServiceFlags, RelayStatus,
     relay::{FlagCheck, ReqExitPolicy},
 };
 use nostr_sdk::{
@@ -17,12 +18,12 @@ use nostr_sdk::{
 };
 use reqwest::{ClientBuilder, Url};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::File,
     net::IpAddr,
     ops::Sub,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 use tokio::{
     sync::{RwLock, watch},
@@ -45,7 +46,7 @@ pub(crate) async fn updater(
     let mut interval = time::interval(args.update_interval.0);
     loop {
         interval.tick().await;
-        retry_with_backoff(args.clone(), || {
+        retry_with_backoff_endless(args.clone(), || {
             let blocked_relays_sender = blocked_relays_sender.clone();
             let args = args.clone();
             let nostr_client = nostr_client.clone();
@@ -54,6 +55,18 @@ pub(crate) async fn updater(
                 if let Err(e) = &result {
                     log::error!("failed to update relays: {e}");
                 }
+
+                tokio::spawn({
+                    let initialized_relays = nostr_client
+                        .relays()
+                        .await
+                        .into_iter()
+                        .filter(|(_, relay)| relay.status() == RelayStatus::Initialized)
+                        .collect::<HashMap<_, _>>();
+                    let args = args.clone();
+                    async move { maybe_ignore_failing_relays(initialized_relays, &args).await }
+                });
+
                 update_connections(&args, &nostr_client).await;
                 update_subscription(
                     args,
@@ -62,6 +75,7 @@ pub(crate) async fn updater(
                     dont_ignore_relays.clone(),
                 )
                 .await?;
+
                 Ok(result?)
             }
         })
@@ -74,15 +88,15 @@ async fn update_relays(
     args: &Broadcastr,
     nostr_client: &NostrClient,
 ) -> ah::Result<()> {
-    log::debug!("updating relays");
-    let request_timeout = args.request_timeout.0;
+    log::info!("updating relays");
     let online_relays = tokio::spawn({
         let relays = args.relays.0.clone();
-        async move { parse_or_fetch_relays(relays, request_timeout).await }
+        let args = args.clone();
+        async move { parse_or_fetch_relays(relays, &args).await }
     });
     let blocked_relays = parse_or_fetch_relays(
         args.blocked_relays.clone().map(|i| i.0).unwrap_or_default(),
-        request_timeout,
+        args,
     )
     .await?;
 
@@ -118,7 +132,7 @@ async fn update_relays(
 
 async fn parse_or_fetch_relays(
     relays_or_relays_lists: HashSet<Url>,
-    request_timeout: Duration,
+    args: &Broadcastr,
 ) -> ah::Result<HashSet<Url>> {
     let futures = relays_or_relays_lists
         .into_iter()
@@ -130,7 +144,8 @@ async fn parse_or_fetch_relays(
                     .map_err(|e| ah::anyhow!(r#"{}, expected format: ["ws://a","wss://b"]"#, e))?
             } else if ["https", "http"].contains(&uri.scheme()) {
                 ClientBuilder::new()
-                    .timeout(request_timeout)
+                    .connect_timeout(args.connection_timeout.0)
+                    .timeout(args.request_timeout.0)
                     .build()?
                     .get(uri.as_ref())
                     .send()
@@ -155,6 +170,7 @@ async fn parse_or_fetch_relays(
 }
 
 async fn update_connections(args: &Broadcastr, nostr_client: &NostrClient) {
+    log::info!("updating connections");
     let start = Instant::now();
     nostr_client.connect().await;
     nostr_client
@@ -182,6 +198,43 @@ async fn update_connections(args: &Broadcastr, nostr_client: &NostrClient) {
     log::debug!("reconnection took {elapsed}, disconnected relays: {disconnected_relays:?}");
 }
 
+async fn maybe_ignore_failing_relays(
+    initialized_relays: HashMap<RelayUrl, Relay>,
+    args: &Broadcastr,
+) {
+    if initialized_relays.is_empty() {
+        return;
+    }
+
+    log::info!("detecting failing relays");
+    let start = Instant::now();
+
+    join_all(
+        initialized_relays
+            .clone()
+            .into_iter()
+            .map(|(relay_url, relay)| {
+                retry_with_backoff(args, move || {
+                    let args = args.clone();
+                    let relay_url = relay_url.clone();
+                    let relay = relay.clone();
+                    async move {
+                        get_relay_info_or_ignore_relay(&args, &relay_url, &relay).await?;
+                        Ok(())
+                    }
+                })
+            }),
+    )
+    .await;
+
+    let elapsed = humantime::Duration::from(start.elapsed());
+    let ignored = initialized_relays
+        .values()
+        .filter(|i| i.status() == RelayStatus::Banned)
+        .count();
+    log::info!("detecting failing relays took {elapsed}, {ignored} relays are ignored");
+}
+
 async fn update_subscription(
     args: Broadcastr,
     nostr_client: NostrClient,
@@ -192,61 +245,58 @@ async fn update_subscription(
         return Ok(());
     }
 
-    tokio::spawn(async move {
-        if let (Some(allowed_pubkeys), Some(allowed_kinds)) =
-            (args.allowed_pubkeys.clone(), args.allowed_kinds.clone())
-        {
-            let now = Timestamp::now().as_secs();
-            let interval = args.update_interval.0.as_secs();
-            let filter = Filter::new()
-                .since(Timestamp::from_secs(now.saturating_sub(interval)))
-                .until(Timestamp::from_secs(now.saturating_add(interval)))
-                .kinds(allowed_kinds.0);
-            let filters = [
-                filter.clone().authors(allowed_pubkeys.0.clone()),
-                filter.pubkeys(allowed_pubkeys.0),
-            ];
+    log::info!("updating subscription");
+    if let (Some(allowed_pubkeys), Some(allowed_kinds)) =
+        (args.allowed_pubkeys.clone(), args.allowed_kinds.clone())
+    {
+        let now = Timestamp::now().as_secs();
+        let interval = args.update_interval.0.as_secs();
+        let filter = Filter::new()
+            .since(Timestamp::from_secs(now.saturating_sub(interval)))
+            .until(Timestamp::from_secs(now.saturating_add(interval)))
+            .kinds(allowed_kinds.0);
+        let filters = [
+            filter.clone().authors(allowed_pubkeys.0.clone()),
+            filter.pubkeys(allowed_pubkeys.0),
+        ];
 
-            log::debug!("subscribing {filters:?}");
-            let start = Instant::now();
+        log::debug!("subscribing {filters:?}");
+        let start = Instant::now();
 
-            let pool = nostr_client.pool();
-            let mut stream = pool
-                .stream_events_from(
-                    pool.relays_with_flag(RelayServiceFlags::READ, FlagCheck::All)
-                        .await
-                        .keys(),
-                    filters.clone(),
-                    args.update_interval.0,
-                    ReqExitPolicy::WaitDurationAfterEOSE(args.update_interval.0),
+        let pool = nostr_client.pool();
+        let mut stream = pool
+            .stream_events_from(
+                pool.relays_with_flag(RelayServiceFlags::READ, FlagCheck::All)
+                    .await
+                    .keys(),
+                filters.clone(),
+                args.update_interval.0,
+                ReqExitPolicy::WaitDurationAfterEOSE(args.update_interval.0),
+            )
+            .await?;
+
+        while let Some(event) = stream.next().await {
+            if filters
+                .iter()
+                .any(|i| i.match_event(&event, MatchEventOptions::default()))
+            {
+                log::debug!("received event {} from subscription", event.id);
+                let _ = spawn_handle_event(
+                    &args,
+                    &nostr_client,
+                    event,
+                    None,
+                    policy.clone(),
+                    dont_ignore_relays.clone(),
+                    true,
                 )
-                .await?;
-
-            while let Some(event) = stream.next().await {
-                if filters
-                    .iter()
-                    .any(|i| i.match_event(&event, MatchEventOptions::default()))
-                {
-                    log::debug!("received event {} from subscription", event.id);
-                    let _ = spawn_handle_event(
-                        &args,
-                        &nostr_client,
-                        event,
-                        None,
-                        policy.clone(),
-                        dont_ignore_relays.clone(),
-                        true,
-                    )
-                    .await;
-                }
+                .await;
             }
-
-            let elapsed = humantime::Duration::from(start.elapsed());
-            log::info!("closed all subscriptions after {elapsed}");
         }
-        Ok::<_, ah::Error>(())
-    })
-    .await??;
+
+        let elapsed = humantime::Duration::from(start.elapsed());
+        log::info!("closed all subscriptions after {elapsed}");
+    }
 
     Ok(())
 }
@@ -339,7 +389,7 @@ async fn handle_event(
                     .len()
                     .saturating_add(relays_without_event.len()),
             );
-            ignore_relays_without_our_events(
+            ignore_failing_relays_without_our_events(
                 args,
                 nostr_client,
                 relays_without_event,
@@ -351,120 +401,151 @@ async fn handle_event(
     Ok(())
 }
 
-async fn ignore_relays_without_our_events(
+async fn ignore_failing_relays_without_our_events(
     args: Broadcastr,
     nostr_client: NostrClient,
     relays_without_event: HashSet<RelayUrl>,
     dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
 ) {
-    join_all(relays_without_event.into_iter().map(async |relay_url| {
-        {
-            if dont_ignore_relays.read().await.contains(&relay_url) {
-                return Ok(());
-            }
-        }
+    let dont_ignore = { dont_ignore_relays.read().await };
 
-        let relay = nostr_client.relay(&relay_url).await?;
-        let status = relay.status();
-        if [RelayStatus::Banned, RelayStatus::Terminated]
+    join_all(
+        relays_without_event
             .into_iter()
-            .any(|i| status == i)
-        {
-            return Ok(());
-        }
-
-        let client = ClientBuilder::new()
-            .timeout(args.request_timeout.0)
-            .build()?;
-        let mut url = relay_url.as_str().parse::<Url>()?;
-        url.set_scheme(match url.scheme() {
-            "ws" => "http",
-            "wss" => "https",
-            _ => bail!("unexpected scheme"),
-        })
-        .map_err(|e| ah::anyhow!("{e:?}"))?;
-
-        let info = client
-            .get(url)
-            .header(reqwest::header::ACCEPT, "application/nostr+json")
-            .send()
-            .await;
-
-        if let Err(e) = &info {
-            let text = format!("{e:?}");
-            log::debug!("failed to retrieve relay info for {relay_url}: {text}");
-            if [
-                "dns error",
-                "InvalidCertificate",
-                "ExpiredContext",
-                "UnrecognisedName",
-                "NotValidForNameContext",
-                "tls handshake eof",
-                "0.0.0.0:443",
-            ]
-            .iter()
-            .any(|i| text.contains(i))
-            {
-                log::debug!("ignore {relay_url}");
-                relay.ban();
-                return Ok(());
-            }
-        }
-
-        let info = info?
-            .json::<RelayInformationDocument>()
-            .await
-            .map_err(|e| ah::anyhow!("{e:?}"))?;
-
-        if let Some(Limitation {
-            auth_required: Some(true),
-            ..
-        }) = info.limitation
-        {
-            log::debug!("ignore {relay_url} due to auth requirement");
-            relay.ban();
-            return Ok(());
-        }
-
-        if let (
-            Some(Limitation {
-                payment_required: Some(true),
-                ..
-            }),
-            Some(allowed_pubkeys),
-        ) = (info.limitation, &args.allowed_pubkeys)
-        {
-            let filter = Filter::new().authors(allowed_pubkeys.0.clone()).limit(1);
-            let found = match nostr_client
-                .fetch_events_from([&relay_url], filter, args.request_timeout.0)
-                .await
-            {
-                Ok(events)
-                    if !events.is_empty()
-                        && events.iter().any(|i| allowed_pubkeys.0.contains(&i.pubkey)) =>
+            .filter(|relay_url| !dont_ignore.contains(relay_url))
+            .map(async |relay_url| {
+                let relay = nostr_client.relay(&relay_url).await?;
+                let status = relay.status();
+                if [RelayStatus::Banned, RelayStatus::Terminated]
+                    .into_iter()
+                    .any(|i| status == i)
                 {
-                    true
-                },
-                Ok(_) => false,
-                Err(e) => {
-                    log::debug!("cannot query relay {relay_url}: {e}");
-                    false
-                },
-            };
+                    return Ok(());
+                }
 
-            if !found {
-                log::debug!("ignore {relay_url} due to payment requirement and no events found");
-                relay.ban();
-                return Ok(());
-            }
-        }
+                let info = get_relay_info_or_ignore_relay(&args, &relay_url, &relay)
+                    .await
+                    .map_err(|e| ah::anyhow!("{e:?}"))?;
 
-        {
-            dont_ignore_relays.write().await.insert(relay_url);
-        }
-        Ok::<_, ah::Error>(())
-    }))
+                // TODO: restricted_writes
+                if let Some(Limitation {
+                    auth_required: Some(true),
+                    ..
+                }) = info.limitation
+                {
+                    log::debug!("ignore {relay_url} due to auth requirement");
+                    relay.ban();
+                    return Ok(());
+                }
+
+                if let (
+                    Some(Limitation {
+                        payment_required: Some(true),
+                        ..
+                    }),
+                    Some(allowed_pubkeys),
+                ) = (info.limitation, &args.allowed_pubkeys)
+                {
+                    let filter = Filter::new().authors(allowed_pubkeys.0.clone()).limit(1);
+                    let found = match nostr_client
+                        .fetch_events_from([&relay_url], filter, args.request_timeout.0)
+                        .await
+                    {
+                        Ok(events)
+                            if !events.is_empty()
+                                && events.iter().any(|i| allowed_pubkeys.0.contains(&i.pubkey)) =>
+                        {
+                            true
+                        },
+                        Ok(_) => false,
+                        Err(e) => {
+                            log::debug!("cannot query relay {relay_url}: {e}");
+                            false
+                        },
+                    };
+
+                    if !found {
+                        log::debug!(
+                            "ignore {relay_url} due to payment requirement and no events found"
+                        );
+                        relay.ban();
+                        return Ok(());
+                    }
+                }
+
+                {
+                    dont_ignore_relays.write().await.insert(relay_url);
+                }
+                Ok::<_, ah::Error>(())
+            }),
+    )
     .await;
+}
+
+async fn get_relay_info_or_ignore_relay(
+    args: &Broadcastr,
+    relay_url: &RelayUrl,
+    relay: &Relay,
+) -> Result<RelayInformationDocument, bf::Error<ah::Error>> {
+    let client = ClientBuilder::new()
+        .connect_timeout(args.connection_timeout.0)
+        .timeout(args.request_timeout.0)
+        .build()
+        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?;
+
+    let mut url = relay_url
+        .as_str()
+        .parse::<Url>()
+        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?;
+    url.set_scheme(match url.scheme() {
+        "ws" => "http",
+        "wss" => "https",
+        _ => return Err(bf::Error::permanent(ah::anyhow!("unexpected scheme"))),
+    })
+    .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?;
+
+    log::debug!("retrieving relay info for {relay_url}");
+
+    let info = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/nostr+json")
+        .send()
+        .await;
+
+    if let Err(e) = &info {
+        let text = format!("{e:?}");
+        log::debug!("failed to retrieve relay info for {relay_url}: {text}");
+        if [
+            "dns error",
+            "InvalidCertificate",
+            "ExpiredContext",
+            "UnrecognisedName",
+            "NotValidForNameContext",
+            "tls handshake eof",
+            "0.0.0.0:443",
+        ]
+        .iter()
+        .any(|i| text.contains(i))
+        {
+            log::info!("ignore {relay_url}");
+            relay.ban();
+            return Err(bf::Error::permanent(ah::anyhow!("{e:?}")));
+        } else {
+            return Err(bf::Error::transient(ah::anyhow!("{e:?}")));
+        }
+    }
+
+    log::debug!("parsing info for {relay_url}");
+
+    let result = info
+        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?
+        .json::<RelayInformationDocument>()
+        .await
+        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")));
+
+    log::debug!("finished parsing for {relay_url}");
+
+    result
 }
 
 impl QueryEvent {
@@ -473,9 +554,14 @@ impl QueryEvent {
         args: &Broadcastr,
         nostr_client: &NostrClient,
     ) -> ah::Result<Self> {
-        let relay_urls: HashSet<RelayUrl> = nostr_client.relays().await.keys().cloned().collect();
+        let relays = nostr_client.relays().await;
+        let relay_urls: HashSet<RelayUrl> = relays.keys().cloned().collect();
         let found_on_relays: HashSet<RelayUrl> =
-            join_all(relay_urls.clone().into_iter().map(|relay_url| async move {
+            join_all(relays.into_iter().map(|(relay_url, relay)| async move {
+                if relay.status() == RelayStatus::Banned {
+                    return None;
+                }
+
                 let filter = Filter::new().ids([event_id]).limit(1);
                 match nostr_client
                     .fetch_events_from([&relay_url], filter, args.request_timeout.0)

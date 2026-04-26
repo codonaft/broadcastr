@@ -155,6 +155,12 @@ async fn main() -> ah::Result<()> {
         ah::bail!("--allowed-pubkeys and --allowed-kinds are required for --subscribe");
     }
 
+    if args.update_interval.0 < args.connection_timeout.0 + args.request_timeout.0 {
+        ah::bail!(
+            "--update-interval should be greater than --connection-timeout + --request-timeout"
+        );
+    }
+
     log::info!("starting {:#?}", args);
 
     let _ = crypto::CryptoProvider::install_default(crypto::ring::default_provider());
@@ -393,7 +399,7 @@ fn normalize_url(mut url: Url) -> ah::Result<Url> {
     Ok(url)
 }
 
-fn retry_with_backoff<F, Fut>(
+fn retry_with_backoff_endless<F, Fut>(
     args: Broadcastr,
     f: F,
 ) -> Retry<impl Sleeper, ExponentialBackoff, impl Notify<ah::Error>, F, Fut>
@@ -404,6 +410,20 @@ where
     let backoff = ExponentialBackoffBuilder::new()
         .with_max_elapsed_time(None)
         .with_max_interval(args.max_backoff_interval.0)
+        .build();
+    bf::future::retry(backoff, f)
+}
+
+fn retry_with_backoff<F, Fut>(
+    args: &Broadcastr,
+    f: F,
+) -> Retry<impl Sleeper, ExponentialBackoff, impl Notify<ah::Error>, F, Fut>
+where
+    Fut: Future<Output = Result<(), bf::Error<ah::Error>>> + Send,
+    F: Fn() -> Fut + Send,
+{
+    let backoff = ExponentialBackoffBuilder::new()
+        .with_max_elapsed_time(Some(args.max_backoff_interval.0))
         .build();
     bf::future::retry(backoff, f)
 }

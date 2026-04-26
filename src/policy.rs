@@ -10,7 +10,7 @@ use nostr_sdk::{
 };
 use reqwest::Url;
 use std::{collections::HashSet, net::IpAddr, num::NonZeroUsize, sync::Arc};
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{Mutex, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 
@@ -24,7 +24,7 @@ pub(crate) struct ClientAndPolicy {
 #[derive(Debug)]
 pub(crate) struct Policy {
     policy: InnerPolicy,
-    seen_event_ids: RwLock<LruCache<EventId, ()>>,
+    seen_event_ids: Mutex<LruCache<EventId, ()>>,
     events_by_author: RateLimitBy<PublicKey>,
     events_by_ip: RateLimitBy<IpAddr>,
 }
@@ -81,7 +81,7 @@ impl Policy {
     fn new(policy: InnerPolicy, args: &Broadcastr) -> Self {
         Self {
             policy,
-            seen_event_ids: RwLock::new(LruCache::new(MAX_SEEN_EVENTS)),
+            seen_event_ids: Mutex::new(LruCache::new(MAX_SEEN_EVENTS)),
             events_by_author: RateLimiter::keyed(Quota::per_minute(
                 args.max_events_by_author_per_min,
             )),
@@ -93,13 +93,11 @@ impl Policy {
         let event_id = event.id;
 
         {
-            if self.seen_event_ids.read().await.contains(&event_id) {
+            let mut seen = self.seen_event_ids.lock().await;
+            if seen.contains(&event_id) {
                 ah::bail!("rate-limit: too many attempts to transmit the same event");
             }
-        }
-
-        {
-            self.seen_event_ids.write().await.put(event_id, ());
+            seen.put(event_id, ());
         }
 
         self.policy.check_event(event)?;
@@ -119,7 +117,7 @@ impl Policy {
     }
 
     pub(crate) async fn forget(&self, id: EventId) {
-        self.seen_event_ids.write().await.pop(&id);
+        self.seen_event_ids.lock().await.pop(&id);
     }
 }
 

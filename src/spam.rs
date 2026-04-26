@@ -1,4 +1,4 @@
-use super::{Broadcastr, retry_with_backoff};
+use super::{Broadcastr, retry_with_backoff_endless};
 use anyhow as ah;
 use backoff::{self as bf};
 use nostr_sdk::PublicKey;
@@ -31,7 +31,10 @@ fn update_azzamo_blocked_pubkeys(
 ) -> JoinHandle<ah::Result<()>> {
     let fetch = move || {
         let output = output.clone();
-        let client = ClientBuilder::new().timeout(args.request_timeout.0).build();
+        let client = ClientBuilder::new()
+            .connect_timeout(args.connection_timeout.0)
+            .timeout(args.request_timeout.0)
+            .build();
         async move {
             let items = async {
                 client?
@@ -51,5 +54,5 @@ fn update_azzamo_blocked_pubkeys(
             Ok(())
         }
     };
-    tokio::spawn(retry_with_backoff(args, fetch))
+    tokio::spawn(retry_with_backoff_endless(args, fetch))
 }
