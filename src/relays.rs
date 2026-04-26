@@ -313,19 +313,19 @@ async fn handle_event(
                     .len()
                     .saturating_add(relays_without_event.len()),
             );
-            ban_auth_relays(args, nostr_client, relays_without_event).await;
+            ignore_relays_without_our_events(args, nostr_client, relays_without_event).await;
         }
     }
     Ok(())
 }
 
-async fn ban_auth_relays(
+async fn ignore_relays_without_our_events(
     args: Broadcastr,
     nostr_client: NostrClient,
     relays_without_event: HashSet<RelayUrl>,
 ) {
     join_all(relays_without_event.into_iter().map(async |relay_url| {
-        let relay = nostr_client.pool().relay(&relay_url).await?;
+        let relay = nostr_client.relay(&relay_url).await?;
         if relay.status() == RelayStatus::Banned {
             return Ok(());
         }
@@ -352,9 +352,42 @@ async fn ban_auth_relays(
             ..
         }) = info.limitation
         {
-            log::debug!("ban {relay_url} due to auth requirement");
+            log::debug!("ignore {relay_url} due to auth requirement");
             relay.ban();
         }
+
+        if let (
+            Some(Limitation {
+                payment_required: Some(true),
+                ..
+            }),
+            Some(allowed_pubkeys),
+        ) = (info.limitation, &args.allowed_pubkeys)
+        {
+            let filter = Filter::new().authors(allowed_pubkeys.0.clone()).limit(1);
+            let found = match nostr_client
+                .fetch_events_from([&relay_url], filter, args.request_timeout.0)
+                .await
+            {
+                Ok(events)
+                    if !events.is_empty()
+                        && events.iter().any(|i| allowed_pubkeys.0.contains(&i.pubkey)) =>
+                {
+                    true
+                },
+                Ok(_) => false,
+                Err(e) => {
+                    log::debug!("cannot query relay {relay_url}: {e}");
+                    false
+                },
+            };
+
+            if !found {
+                log::debug!("ignore {relay_url} due to payment requirement and no events found");
+                relay.ban();
+            }
+        }
+
         Ok::<_, ah::Error>(())
     }))
     .await;
