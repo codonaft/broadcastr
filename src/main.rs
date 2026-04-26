@@ -32,6 +32,8 @@ use tokio::net::TcpListener;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tungstenite::protocol::WebSocketConfig;
 
+pub const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
 const MIN_SIZE: usize = 128;
 
 #[derive(FromArgs, Clone, Debug)]
@@ -99,7 +101,7 @@ struct Broadcastr {
     disable_azzamo: bool,
 
     /// relays and spam-lists update interval (default is 15m)
-    #[argh(option, default = "DurationArg(Duration::from_secs(15 * 60))")]
+    #[argh(option, default = "DurationArg(UPDATE_INTERVAL)")]
     update_interval: DurationArg,
 
     /// max update backoff interval (default is 5m)

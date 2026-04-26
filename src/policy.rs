@@ -1,17 +1,16 @@
+use crate::{Broadcastr, UPDATE_INTERVAL};
 use anyhow as ah;
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use lru::LruCache;
 use nostr_sdk::{
     Alphabet, Client as NostrClient, ClientOptions, Event, EventId, Kind as EventKind, PublicKey,
-    RelayUrl, SingleLetterTag, SubscriptionId, Tag,
+    RelayUrl, SingleLetterTag, SubscriptionId, Tag, Timestamp,
     prelude::{AdmitPolicy, AdmitStatus, PolicyError},
     util::BoxedFuture,
 };
 use reqwest::Url;
 use std::{collections::HashSet, net::IpAddr, num::NonZeroUsize, sync::Arc};
 use tokio::sync::{RwLock, watch};
-
-use crate::Broadcastr;
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 
@@ -139,6 +138,16 @@ impl InnerPolicy {
             } else if !self.mentions_allowed_pubkeys(event) {
                 ah::bail!("unexpected author or mentioned public key");
             }
+        }
+
+        if event.created_at
+            > Timestamp::from_secs(
+                Timestamp::now()
+                    .as_secs()
+                    .saturating_add(UPDATE_INTERVAL.as_secs()),
+            )
+        {
+            ah::bail!("event from the future");
         }
 
         if self.is_spam(event) {

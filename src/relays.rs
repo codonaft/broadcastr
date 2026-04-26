@@ -10,7 +10,10 @@ use nostr_relay_pool::{
     RelayServiceFlags,
     relay::{FlagCheck, ReqExitPolicy},
 };
-use nostr_sdk::{Client as NostrClient, Event, EventId, Filter, RelayUrl, Timestamp, serde_json};
+use nostr_sdk::{
+    Client as NostrClient, Event, EventId, Filter, RelayUrl, Timestamp, filter::MatchEventOptions,
+    serde_json,
+};
 use reqwest::{ClientBuilder, Url};
 use std::{
     collections::HashSet,
@@ -176,13 +179,12 @@ async fn update_subscription(
         if let (Some(allowed_pubkeys), Some(allowed_kinds)) =
             (args.allowed_pubkeys.clone(), args.allowed_kinds.clone())
         {
-            let since = Timestamp::from_secs(
-                Timestamp::now()
-                    .as_secs()
-                    .saturating_sub(args.update_interval.0.as_secs()),
-            );
-
-            let filter = Filter::new().since(since).kinds(allowed_kinds.0);
+            let now = Timestamp::now().as_secs();
+            let interval = args.update_interval.0.as_secs();
+            let filter = Filter::new()
+                .since(Timestamp::from_secs(now.saturating_sub(interval)))
+                .until(Timestamp::from_secs(now.saturating_add(interval)))
+                .kinds(allowed_kinds.0);
             let filters = [
                 filter.clone().authors(allowed_pubkeys.0.clone()),
                 filter.pubkeys(allowed_pubkeys.0),
@@ -197,16 +199,22 @@ async fn update_subscription(
                     pool.relays_with_flag(RelayServiceFlags::READ, FlagCheck::All)
                         .await
                         .keys(),
-                    filters,
+                    filters.clone(),
                     args.update_interval.0,
                     ReqExitPolicy::WaitDurationAfterEOSE(args.update_interval.0),
                 )
                 .await?;
 
             while let Some(event) = stream.next().await {
-                log::debug!("received event {} from subscription", event.id);
-                let _ = spawn_handle_event(&args, &nostr_client, event, None, policy.clone(), true)
-                    .await;
+                if filters
+                    .iter()
+                    .any(|i| i.match_event(&event, MatchEventOptions::default()))
+                {
+                    log::debug!("received event {} from subscription", event.id);
+                    let _ =
+                        spawn_handle_event(&args, &nostr_client, event, None, policy.clone(), true)
+                            .await;
+                }
             }
 
             let elapsed = humantime::Duration::from(start.elapsed());
@@ -323,8 +331,10 @@ impl QueryEvent {
                     .fetch_events_from([&relay_url], filter, args.request_timeout.0)
                     .await
                 {
-                    Ok(events) if events.is_empty() => None,
-                    Ok(_) => Some(relay_url),
+                    Ok(events) if !events.is_empty() && events.iter().any(|i| i.id == event_id) => {
+                        Some(relay_url)
+                    },
+                    Ok(_) => None,
                     Err(e) => {
                         log::debug!("cannot query relay {relay_url}: {e}");
                         None
