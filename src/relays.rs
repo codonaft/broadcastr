@@ -247,7 +247,7 @@ async fn update_subscription(
 
     log::info!("updating subscription");
     if let (Some(allowed_pubkeys), Some(allowed_kinds)) =
-        (args.allowed_pubkeys.clone(), args.allowed_kinds.clone())
+        (args.allow_pubkeys.clone(), args.allow_kinds.clone())
     {
         let now = Timestamp::now().as_secs();
         let interval = args.update_interval.0.as_secs();
@@ -444,7 +444,7 @@ async fn ignore_failing_relays_without_our_events(
                         ..
                     }),
                     Some(allowed_pubkeys),
-                ) = (info.limitation, &args.allowed_pubkeys)
+                ) = (info.limitation, &args.allow_pubkeys)
                 {
                     let filter = Filter::new().authors(allowed_pubkeys.0.clone()).limit(1);
                     let found = match nostr_client

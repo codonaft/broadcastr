@@ -71,7 +71,7 @@ struct Broadcastr {
 
     /// authors or mentioned authors (comma-separated hex/bech32/NIP-21 allow-list)
     #[argh(option)]
-    allowed_pubkeys: Option<nostr::PublicKeys>,
+    allow_pubkeys: Option<nostr::PublicKeys>,
 
     /// disallow mentions (of the allowed authors) by others (default is false)
     #[argh(switch)]
@@ -88,7 +88,7 @@ struct Broadcastr {
     /// limit event kinds with
     /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
     #[argh(option)]
-    allowed_kinds: Option<nostr::EventKinds>,
+    allow_kinds: Option<nostr::EventKinds>,
 
     /// subscribe and automatically distribute events of the allowed authors and kinds
     #[argh(switch)]
@@ -151,7 +151,7 @@ async fn main() -> ah::Result<()> {
         ColorChoice::Auto,
     )?;
 
-    if args.subscribe && (args.allowed_pubkeys.is_none() || args.allowed_kinds.is_none()) {
+    if args.subscribe && (args.allow_pubkeys.is_none() || args.allow_kinds.is_none()) {
         ah::bail!("--allowed-pubkeys and --allowed-kinds are required for --subscribe");
     }
 

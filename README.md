@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allowed-pubkeys <allowed-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allowed-kinds <allowed-kinds>] [--subscribe] [--disable-gossip] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allow-pubkeys <allow-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allow-kinds <allow-kinds>] [--subscribe] [--disable-gossip] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -56,7 +56,7 @@ Options:
                     "127.0.0.1:9050")
   --proxy           connect to all relays using socks5 proxy
   --min-pow         pow difficulty limit (NIP-13)
-  --allowed-pubkeys authors or mentioned authors (comma-separated
+  --allow-pubkeys   authors or mentioned authors (comma-separated
                     hex/bech32/NIP-21 allow-list)
   --disable-mentions
                     disallow mentions (of the allowed authors) by others
@@ -65,7 +65,7 @@ Options:
                     limit events by author (default is 5)
   --max-events-by-ip-per-min
                     limit events by IP (default is 50)
-  --allowed-kinds   limit event kinds with (comma-separated allow-list, e.g
+  --allow-kinds     limit event kinds with (comma-separated allow-list, e.g
                     "0,1,3,5,6,7,4550,34550")
   --subscribe       subscribe and automatically distribute events of the allowed
                     authors and kinds

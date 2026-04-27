@@ -47,9 +47,9 @@ impl ClientAndPolicy {
         let (azzamo_blocked_pubkeys_sender, azzamo_blocked_pubkeys_receiver) =
             watch::channel(HashSet::default());
         let policy = InnerPolicy {
-            allowed_pubkeys: args.allowed_pubkeys.clone().unwrap_or_default().0,
+            allowed_pubkeys: args.allow_pubkeys.clone().unwrap_or_default().0,
             disable_mentions: args.disable_mentions,
-            allowed_kinds: args.allowed_kinds.clone().unwrap_or_default().0,
+            allowed_kinds: args.allow_kinds.clone().unwrap_or_default().0,
             min_pow: args.min_pow,
             blocked_relays_receiver,
             azzamo_blocked_pubkeys_receiver,
