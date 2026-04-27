@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allow-pubkeys <allow-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allow-kinds <allow-kinds>] [--subscribe] [--disable-gossip] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allow-pubkeys <allow-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allow-kinds <allow-kinds>] [--subscribe] [--detect-failing-relays] [--disable-gossip] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -69,6 +69,10 @@ Options:
                     "0,1,3,5,6,7,4550,34550")
   --subscribe       subscribe and automatically distribute events of the allowed
                     authors and kinds
+  --detect-failing-relays
+                    aggressively detect relays that can't receive relevant
+                    events (may save some bandwidth in the long run but will
+                    consume more CPU on start; default is false)
   --disable-gossip  don't discover additional relays from user profiles
   --disable-azzamo  don't use azzamo.net for spam filtering
   --update-interval relays and spam-lists update interval (default is 15m)

@@ -56,16 +56,18 @@ pub(crate) async fn updater(
                     log::error!("failed to update relays: {e}");
                 }
 
-                tokio::spawn({
-                    let initialized_relays = nostr_client
-                        .relays()
-                        .await
-                        .into_iter()
-                        .filter(|(_, relay)| relay.status() == RelayStatus::Initialized)
-                        .collect::<HashMap<_, _>>();
-                    let args = args.clone();
-                    async move { maybe_ignore_failing_relays(initialized_relays, &args).await }
-                });
+                if args.detect_failing_relays {
+                    tokio::spawn({
+                        let initialized_relays = nostr_client
+                            .relays()
+                            .await
+                            .into_iter()
+                            .filter(|(_, relay)| relay.status() == RelayStatus::Initialized)
+                            .collect::<HashMap<_, _>>();
+                        let args = args.clone();
+                        async move { maybe_ignore_failing_relays(initialized_relays, &args).await }
+                    });
+                }
 
                 update_connections(&args, &nostr_client).await;
                 update_subscription(
