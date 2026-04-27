@@ -105,30 +105,29 @@ async fn update_relays(
     blocked_relays_sender.send(blocked_relays.clone())?;
     let online_relays = online_relays.await??;
 
+    let client_relays = nostr_client.relays().await;
+    let failing_relays = client_relays
+        .values()
+        .filter(|i| i.status() == RelayStatus::Banned)
+        .map(|i| normalize_url(i.url().as_str().parse()?))
+        .collect::<ah::Result<HashSet<Url>>>()?;
     let all_relays = online_relays.sub(&blocked_relays);
-    for i in &all_relays {
+    for i in &all_relays.sub(&failing_relays) {
         nostr_client.add_relay(i).await?;
     }
 
-    let outdated_relays = all_relays.sub(
-        &nostr_client
-            .relays()
-            .await
-            .into_keys()
-            .map(|i| normalize_url(i.as_str().parse()?))
-            .collect::<ah::Result<HashSet<Url>>>()?,
-    );
+    let outdated_relays = nostr_client
+        .relays()
+        .await
+        .into_keys()
+        .map(|i| normalize_url(i.as_str().parse()?))
+        .collect::<ah::Result<HashSet<Url>>>()?
+        .sub(&all_relays);
     for i in &outdated_relays {
         log::info!("removing outdated relay {i}");
         let _ = nostr_client.remove_relay(i).await;
     }
     log::debug!("finished updating relays");
-
-    let client_relays = nostr_client.relays().await;
-    debug_assert_eq!(
-        client_relays.len(),
-        all_relays.len() - outdated_relays.len()
-    );
     Ok(())
 }
 
@@ -187,13 +186,13 @@ async fn update_connections(args: &Broadcastr, nostr_client: &NostrClient) {
         .filter(|(_, relay)| !relay.is_connected())
         .map(|(url, _)| url.to_string())
         .collect::<Vec<_>>();
-    let ignored = client_relays
+    let failing_relays = client_relays
         .values()
         .filter(|i| i.status() == RelayStatus::Banned)
         .count();
     log::info!(
-        "currently connected to {connected_relays}/{} relays, disconnected from {}, {ignored} \
-         ignored",
+        "currently connected to {connected_relays}/{} relays, disconnected from {}, \
+         {failing_relays} are failing",
         client_relays.len(),
         disconnected_relays.len(),
     );
@@ -230,11 +229,11 @@ async fn maybe_ignore_failing_relays(
     .await;
 
     let elapsed = humantime::Duration::from(start.elapsed());
-    let ignored = initialized_relays
+    let failing = initialized_relays
         .values()
         .filter(|i| i.status() == RelayStatus::Banned)
         .count();
-    log::info!("detecting failing relays took {elapsed}, {ignored} relays are ignored");
+    log::info!("detecting failing relays took {elapsed}, {failing} relays are failing");
 }
 
 async fn update_subscription(
