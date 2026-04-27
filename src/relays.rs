@@ -416,11 +416,7 @@ async fn ignore_failing_relays_without_our_events(
             .filter(|relay_url| !dont_ignore.contains(relay_url))
             .map(async |relay_url| {
                 let relay = nostr_client.relay(&relay_url).await?;
-                let status = relay.status();
-                if [RelayStatus::Banned, RelayStatus::Terminated]
-                    .into_iter()
-                    .any(|i| status == i)
-                {
+                if relay.status() == RelayStatus::Banned {
                     return Ok(());
                 }
 
