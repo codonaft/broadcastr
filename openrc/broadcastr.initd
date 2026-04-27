@@ -1,16 +1,16 @@
 #!/sbin/openrc-run
 
-name="broadcastr"
-
-command="/usr/local/bin/${name}"
+command="/usr/local/bin/${RC_SVCNAME}"
 command_user="nobody:nobody"
 command_background="true"
 command_args="${broadcastr_args}"
 retry="10"
 
-pidfile="/run/${name}.pid"
-output_logger="logger"
-error_logger="logger"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_logger="logger -t ${RC_SVCNAME}"
+error_logger="logger -t ${RC_SVCNAME}"
+
+rc_ulimit="-n 65535"
 
 depend() {
 	need net

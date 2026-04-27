@@ -492,6 +492,7 @@ async fn get_relay_info_or_ignore_relay(
     let client = ClientBuilder::new()
         .connect_timeout(args.connection_timeout.0)
         .timeout(args.request_timeout.0)
+        .tcp_keepalive(None)
         .build()
         .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?;
 
