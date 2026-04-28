@@ -1,5 +1,5 @@
 use super::{Broadcastr, normalize_url, retry_with_backoff_endless};
-use crate::{Policy, retry_with_backoff};
+use crate::{Policy, proxied_client_builder, retry_with_backoff};
 use anyhow::{self as ah, Context};
 use backoff as bf;
 use futures::{
@@ -484,17 +484,17 @@ async fn get_relay_info_or_ignore_relay(
     relay_url: &RelayUrl,
     relay: &Relay,
 ) -> Result<RelayInformationDocument, bf::Error<ah::Error>> {
-    let client = ClientBuilder::new()
-        .connect_timeout(args.connection_timeout.0)
-        .timeout(args.request_timeout.0)
-        .tcp_keepalive(None)
-        .build()
-        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?;
-
     let mut url = relay_url
         .as_str()
         .parse::<Url>()
-        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?;
+        .map_err(|e| bf::Error::permanent(ah::Error::from(e)))?;
+
+    let client = proxied_client_builder(&url, args)
+        .map_err(bf::Error::permanent)?
+        .tcp_keepalive(None)
+        .build()
+        .map_err(|e| bf::Error::permanent(ah::Error::from(e)))?;
+
     url.set_scheme(match url.scheme() {
         "ws" => "http",
         "wss" => "https",
@@ -527,19 +527,19 @@ async fn get_relay_info_or_ignore_relay(
         {
             log::info!("ignore {relay_url}");
             relay.ban();
-            return Err(bf::Error::permanent(ah::anyhow!("{e:?}")));
+            return Err(bf::Error::permanent(ah::anyhow!(text)));
         } else {
-            return Err(bf::Error::transient(ah::anyhow!("{e:?}")));
+            return Err(bf::Error::transient(ah::anyhow!(text)));
         }
     }
 
     log::debug!("parsing info for {relay_url}");
 
     let result = info
-        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")))?
+        .map_err(|e| bf::Error::permanent(ah::Error::from(e)))?
         .json::<RelayInformationDocument>()
         .await
-        .map_err(|e| bf::Error::permanent(ah::anyhow!("{e:?}")));
+        .map_err(|e| bf::Error::permanent(ah::Error::from(e)));
 
     log::debug!("finished parsing for {relay_url}");
 

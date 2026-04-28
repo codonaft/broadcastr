@@ -1,8 +1,9 @@
 use super::{Broadcastr, retry_with_backoff_endless};
+use crate::proxied_client_builder;
 use anyhow as ah;
 use backoff::{self as bf};
 use nostr_sdk::PublicKey;
-use reqwest::ClientBuilder;
+use reqwest::Url;
 use std::collections::HashSet;
 use tokio::{sync::watch, task::JoinHandle, time};
 
@@ -29,29 +30,34 @@ fn update_azzamo_blocked_pubkeys(
     args: Broadcastr,
     output: watch::Sender<HashSet<PublicKey>>,
 ) -> JoinHandle<ah::Result<()>> {
-    let fetch = move || {
-        let output = output.clone();
-        let client = ClientBuilder::new()
-            .connect_timeout(args.connection_timeout.0)
-            .timeout(args.request_timeout.0)
-            .build();
-        async move {
-            let items = async {
-                client?
-                    .get("https://ban-api.azzamo.net/public/blocked/pubkeys")
-                    .send()
-                    .await?
-                    .json::<HashSet<_>>()
-                    .await
-            }
-            .await
-            .map_err(|e| bf::Error::transient(e.into()))?;
+    let args = args.clone();
+    let fetch = {
+        let args = args.clone();
+        move || {
+            let args = args.clone();
+            let output = output.clone();
+            async move {
+                let url = Url::parse("https://ban-api.azzamo.net/public/blocked/pubkeys")
+                    .map_err(|e| bf::Error::permanent(e.into()))?;
+                let client = proxied_client_builder(&url, &args);
+                let items = async {
+                    Ok(client?
+                        .build()?
+                        .get(url)
+                        .send()
+                        .await?
+                        .json::<HashSet<_>>()
+                        .await?)
+                }
+                .await
+                .map_err(bf::Error::transient)?;
 
-            log::debug!("azzamo: fetched {}", items.len());
-            output
-                .send(items)
-                .map_err(|e| bf::Error::transient(e.into()))?;
-            Ok(())
+                log::debug!("azzamo: fetched {}", items.len());
+                output
+                    .send(items)
+                    .map_err(|e| bf::Error::transient(e.into()))?;
+                Ok(())
+            }
         }
     };
     tokio::spawn(retry_with_backoff_endless(args, fetch))

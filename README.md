@@ -124,7 +124,7 @@ Options:
   - make sure we don't attempt to connect to faulty relays
     - retry to connect with an exponential backoff?
 - [ ] add metrics
-- [ ] socks5/http proxy for all connections?
+- [x] socks5/http proxy for all connections
 - [x] remove `spam.nostr.band`?
 - ~~login to NIP-42 relays?~~
   - does it make sense transmitting someone else's events from a generated `nsec`?

@@ -22,9 +22,10 @@ use nostr_sdk::{
         options::{GossipOptions, GossipRelayLimits},
     },
     nips::nip11::RelayInformationDocument,
+    types::Host,
 };
 use policy::{ClientAndPolicy, Policy};
-use reqwest::Url;
+use reqwest::{ClientBuilder, Proxy, Url};
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
@@ -379,6 +380,23 @@ async fn new_listeners(args: &Broadcastr) -> ah::Result<Vec<TcpListener>> {
         result.push(listener);
     }
     Ok(result)
+}
+
+fn proxied_client_builder(url: &Url, args: &Broadcastr) -> ah::Result<ClientBuilder> {
+    let client = ClientBuilder::new()
+        .connect_timeout(args.connection_timeout.0)
+        .timeout(args.request_timeout.0);
+    let client = if let Some(proxy) = args.proxy {
+        client.proxy(Proxy::all(format!("socks5h://{proxy}")).map_err(ah::Error::from)?)
+    } else if let Some(tor_proxy) = args.tor_proxy
+        && let Some(Host::Domain(relay_host)) = url.host()
+        && relay_host.ends_with(".onion")
+    {
+        client.proxy(Proxy::all(format!("socks5h://{tor_proxy}")).map_err(ah::Error::from)?)
+    } else {
+        client
+    };
+    Ok(client)
 }
 
 fn normalize_url(mut url: Url) -> ah::Result<Url> {
