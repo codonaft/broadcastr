@@ -96,7 +96,7 @@ struct Broadcastr {
     subscribe: bool,
 
     /// aggressively detect relays that can't receive relevant events
-    /// (may save some bandwidth in the long run but will consume more CPU on start; default is false)
+    /// (may save some bandwidth in the long run but will consume more CPU, especially on start; default is false)
     #[argh(switch)]
     detect_failing_relays: bool,
 

@@ -72,7 +72,7 @@ Options:
   --detect-failing-relays
                     aggressively detect relays that can't receive relevant
                     events (may save some bandwidth in the long run but will
-                    consume more CPU on start; default is false)
+                    consume more CPU, especially on start; default is false)
   --disable-gossip  don't discover additional relays from user profiles
   --disable-azzamo  don't use azzamo.net for spam filtering
   --update-interval relays and spam-lists update interval (default is 15m)

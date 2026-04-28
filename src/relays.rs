@@ -408,6 +408,10 @@ async fn ignore_failing_relays_without_our_events(
     relays_without_event: HashSet<RelayUrl>,
     dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
 ) {
+    if !args.detect_failing_relays {
+        return;
+    }
+
     let dont_ignore = { dont_ignore_relays.read().await };
 
     join_all(
