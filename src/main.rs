@@ -1,5 +1,6 @@
-mod nostr;
+mod nostr_helpers;
 mod policy;
+mod relay_lists;
 mod relays;
 mod spam;
 
@@ -14,22 +15,26 @@ use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use git_version::git_version;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr_relay_pool::{RelayLimits, relay::limits::RelayEventLimits};
+use nostr::{
+    JsonUtil, Kind as EventKind, RelayUrl, nips::nip11::RelayInformationDocument, types::Host,
+};
 use nostr_sdk::{
-    Client as NostrClient, ClientOptions, JsonUtil, RelayUrl,
     client::{
-        Connection, ConnectionTarget,
-        options::{GossipOptions, GossipRelayLimits},
+        Client as NostrClient, Connection, ConnectionTarget, GossipConfig, GossipRelayLimits,
     },
-    nips::nip11::RelayInformationDocument,
-    types::Host,
+    relay::{RelayEventLimits, RelayLimits},
 };
 use policy::{ClientAndPolicy, Policy};
 use reqwest::{ClientBuilder, Proxy, Url};
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
-    collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    num::NonZeroU32,
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
 };
 use tokio::{net::TcpListener, sync::RwLock};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
@@ -39,6 +44,8 @@ pub const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 const MIN_SIZE: usize = 128;
 
+// TODO: limit total number of possible relays (max_relays)
+
 #[derive(FromArgs, Clone, Debug)]
 #[argh(help_triggers("-h", "--help"))]
 /// Broadcast Nostr events to other relays
@@ -47,22 +54,26 @@ struct Broadcastr {
     #[argh(option)]
     listen: Url,
 
-    /// relays or relay-list URIs
+    /// relays or dynamically refreshable relay-list URIs
     /// (comma-separated, e.g. "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
     #[argh(option)]
-    relays: Urls,
+    relays: Option<Urls>,
+
+    /// same, but for read-only relays; overrides entries of the write relays
+    #[argh(option)]
+    read_relays: Option<Urls>,
 
     /// same, but for ignored relays;
     /// put public URL to your broadcastr here to avoid loops
     #[argh(option)]
-    blocked_relays: Option<Urls>,
+    block_relays: Option<Urls>,
 
     /// connect to tor onion relays using socks5 proxy
     /// (e.g. "127.0.0.1:9050")
     #[argh(option)]
     tor_proxy: Option<SocketAddr>,
 
-    /// connect to all relays using socks5 proxy
+    /// make all connections using socks5 proxy
     #[argh(option)]
     proxy: Option<SocketAddr>,
 
@@ -70,13 +81,22 @@ struct Broadcastr {
     #[argh(option)]
     min_pow: Option<u8>,
 
-    /// authors or mentioned authors (comma-separated hex/bech32/NIP-21 allow-list)
+    /// allow authors or mentioned authors only (comma-separated hex/bech32/NIP-21 allow-list)
     #[argh(option)]
-    allow_pubkeys: Option<nostr::PublicKeys>,
+    pubkeys: Option<nostr_helpers::PublicKeys>,
 
-    /// disallow mentions (of the allowed authors) by others (default is false)
+    /// disallow mentions (of the allowed authors) by others
     #[argh(switch)]
-    disable_mentions: bool,
+    no_mentions: bool,
+
+    /// allow some event kinds only
+    /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
+    #[argh(option)]
+    event_kinds: Option<nostr_helpers::EventKinds>,
+
+    /// subscribe and automatically distribute events of the allowed authors and event kinds
+    #[argh(switch)]
+    subscribe: bool,
 
     /// limit events by author (default is 5)
     #[argh(option, default = "nonzero!(5u32)")]
@@ -86,27 +106,22 @@ struct Broadcastr {
     #[argh(option, default = "nonzero!(50u32)")]
     max_events_by_ip_per_min: NonZeroU32,
 
-    /// limit event kinds with
-    /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
-    #[argh(option)]
-    allow_kinds: Option<nostr::EventKinds>,
-
-    /// subscribe and automatically distribute events of the allowed authors and kinds
-    #[argh(switch)]
-    subscribe: bool,
-
-    /// aggressively detect relays that can't receive relevant events
-    /// (may save some bandwidth in the long run but will consume more CPU, especially on start; default is false)
-    #[argh(switch)]
-    detect_failing_relays: bool,
-
     /// don't discover additional relays from user profiles
     #[argh(switch)]
-    disable_gossip: bool,
+    no_gossip: bool,
+
+    /// don't discover additional relays using NIP-66
+    #[argh(switch)]
+    no_nip66: bool,
 
     /// don't use azzamo.net for spam filtering
     #[argh(switch)]
-    disable_azzamo: bool,
+    no_azzamo: bool,
+
+    /// aggressively detect relays that can't receive relevant events
+    /// (may save some bandwidth in the long run but will consume more CPU, especially on start)
+    #[argh(switch)]
+    detect_failing_relays: bool,
 
     /// relays and spam-lists update interval (default is 15m)
     #[argh(option, default = "DurationArg(UPDATE_INTERVAL)")]
@@ -157,14 +172,22 @@ async fn main() -> ah::Result<()> {
         ColorChoice::Auto,
     )?;
 
-    if args.subscribe && (args.allow_pubkeys.is_none() || args.allow_kinds.is_none()) {
-        ah::bail!("--allowed-pubkeys and --allowed-kinds are required for --subscribe");
+    if args.relays.is_none() && args.read_relays.is_none() {
+        ah::bail!("either --relays or --read-relays is required");
+    }
+
+    if args.subscribe && (args.pubkeys.is_none() || args.event_kinds.is_none()) {
+        ah::bail!("--pubkeys and --kinds are required for --subscribe");
     }
 
     if args.update_interval.0 < args.connection_timeout.0 + args.request_timeout.0 {
         ah::bail!(
             "--update-interval should be greater than --connection-timeout + --request-timeout"
         );
+    }
+
+    if args.no_mentions && args.pubkeys.is_none() {
+        ah::bail!("--pubkeys is required for --no-mentions");
     }
 
     log::info!("starting {:#?}", args);
@@ -185,14 +208,6 @@ async fn main() -> ah::Result<()> {
         ah::bail!("{size} is too small");
     }
 
-    let relay_limits = RelayLimits {
-        events: RelayEventLimits {
-            max_size: Some(args.max_msg_size as u32),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
     let ws_message_size = args.max_msg_size * 4;
     let ws_config = WebSocketConfig::default()
         .max_write_buffer_size(
@@ -203,43 +218,22 @@ async fn main() -> ah::Result<()> {
         .max_message_size(Some(ws_message_size))
         .max_frame_size(Some(args.max_frame_size as usize));
 
-    let mut opts = ClientOptions::new()
-        // event signing is not supported
-        .automatic_authentication(false)
-        .gossip(GossipOptions {
-            limits: if args.disable_gossip {
-                GossipRelayLimits {
-                    read_relays_per_user: 0,
-                    write_relays_per_user: 0,
-                    hint_relays_per_user: 0,
-                    most_used_relays_per_user: 0,
-                    nip17_relays: 0,
-                }
-            } else {
-                GossipRelayLimits::default()
-            },
-        })
-        .relay_limits(relay_limits);
-    let mut connection: Connection = Connection::new();
-    opts = if let Some(proxy) = args.proxy {
-        connection = connection.proxy(proxy);
-        opts.connection(connection.target(ConnectionTarget::All))
+    let connection = Connection::new();
+    let connection = if let Some(proxy) = args.proxy {
+        connection.proxy(proxy).target(ConnectionTarget::All)
     } else if let Some(tor_proxy) = args.tor_proxy {
-        connection = connection.proxy(tor_proxy);
-        opts.connection(connection.target(ConnectionTarget::Onion))
+        connection.proxy(tor_proxy).target(ConnectionTarget::Onion)
     } else {
-        opts
+        connection
     };
 
     let ClientAndPolicy {
         nostr_client,
         policy,
-        blocked_relays_sender,
-        azzamo_blocked_pubkeys_sender,
-    } = ClientAndPolicy::new(&args, opts)?;
-
-    let dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>> =
-        Arc::new(RwLock::new(HashSet::default()));
+        block_relays,
+        seen_nip11,
+        azzamo_block_pubkeys_sender,
+    } = ClientAndPolicy::new(&args, connection)?;
 
     Toplevel::new({
         async move |s: &mut SubsystemHandle| {
@@ -262,7 +256,8 @@ async fn main() -> ah::Result<()> {
                             &args,
                             &nostr_client,
                             &policy,
-                            &dont_ignore_relays,
+                            &block_relays,
+                            &seen_nip11,
                         )
                         .boxed()
                     });
@@ -275,14 +270,14 @@ async fn main() -> ah::Result<()> {
                             }
                             .boxed(),
                             relays::updater(
-                                blocked_relays_sender,
+                                &block_relays,
+                                &seen_nip11,
                                 &args,
                                 &nostr_client,
                                 &policy,
-                                &dont_ignore_relays,
                             )
                             .boxed(),
-                            spam::azzamo_updater(&args, azzamo_blocked_pubkeys_sender).boxed(),
+                            spam::azzamo_updater(&args, azzamo_block_pubkeys_sender).boxed(),
                         ]
                         .into_iter()
                         .chain(listeners),
@@ -308,7 +303,8 @@ async fn serve(
     args: &Broadcastr,
     nostr_client: &NostrClient,
     policy: &Arc<Policy>,
-    dont_ignore_relays: &Arc<RwLock<HashSet<RelayUrl>>>,
+    block_relays: &Arc<RwLock<HashSet<Url>>>,
+    seen_nip11: &Arc<RwLock<HashSet<Url>>>,
 ) -> ah::Result<()> {
     let relay_info = {
         let body = RelayInformationDocument {
@@ -330,13 +326,14 @@ async fn serve(
         match listener.accept().await {
             Ok((stream, _client_addr)) => {
                 tokio::spawn(
-                    nostr::handle_ws_connection(
+                    nostr_helpers::handle_ws_connection(
                         stream,
                         ws_config,
                         args.clone(),
                         nostr_client.clone(),
                         policy.clone(),
-                        dont_ignore_relays.clone(),
+                        block_relays.clone(),
+                        seen_nip11.clone(),
                         relay_info.clone(),
                     )
                     .map_err(move |e| {

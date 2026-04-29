@@ -2,7 +2,7 @@ use super::{Broadcastr, retry_with_backoff_endless};
 use crate::proxied_client_builder;
 use anyhow as ah;
 use backoff::{self as bf};
-use nostr_sdk::PublicKey;
+use nostr::PublicKey;
 use reqwest::Url;
 use std::collections::HashSet;
 use tokio::{sync::watch, task::JoinHandle, time};
@@ -11,7 +11,7 @@ pub(crate) async fn azzamo_updater(
     args: &Broadcastr,
     spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 ) -> ah::Result<()> {
-    if args.disable_azzamo {
+    if args.no_azzamo {
         return Ok(());
     }
 

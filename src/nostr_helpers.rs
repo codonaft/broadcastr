@@ -5,11 +5,12 @@ use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use futures_util::stream::SplitSink;
 use httparse::Status;
-use nostr_sdk::{
-    Client as NostrClient, ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey,
-    RelayMessage, RelayUrl, SubscriptionId, serde_json,
+use nostr::{
+    ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey, RelayMessage, RelayUrl,
+    SubscriptionId, serde_json,
 };
-use reqwest::header;
+use nostr_sdk::client::Client as NostrClient;
+use reqwest::{Url, header};
 use std::{borrow::Cow, collections::HashSet, net::IpAddr, str::FromStr, sync::Arc};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::RwLock};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
@@ -36,7 +37,8 @@ pub(crate) async fn handle_ws_connection(
     args: Broadcastr,
     nostr_client: NostrClient,
     policy: Arc<Policy>,
-    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
+    block_relays: Arc<RwLock<HashSet<Url>>>,
+    seen_nip11: Arc<RwLock<HashSet<Url>>>,
     relay_info: String,
 ) -> ah::Result<()> {
     let ParsedHttpHeaders { ws, ip } = parse_http_headers(&stream).await;
@@ -76,7 +78,8 @@ pub(crate) async fn handle_ws_connection(
                     args.clone(),
                     nostr_client.clone(),
                     policy.clone(),
-                    dont_ignore_relays.clone(),
+                    block_relays.clone(),
+                    seen_nip11.clone(),
                 )
                 .await;
             },
@@ -135,7 +138,8 @@ async fn handle_client_message(
     args: Broadcastr,
     nostr_client: NostrClient,
     policy: Arc<Policy>,
-    dont_ignore_relays: Arc<RwLock<HashSet<RelayUrl>>>,
+    block_relays: Arc<RwLock<HashSet<Url>>>,
+    seen_nip11: Arc<RwLock<HashSet<Url>>>,
 ) {
     use ClientMessage::*;
     match client_message {
@@ -148,7 +152,8 @@ async fn handle_client_message(
                 event,
                 ip,
                 policy,
-                dont_ignore_relays,
+                block_relays,
+                seen_nip11,
                 false,
             )
             .await

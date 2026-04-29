@@ -34,7 +34,7 @@ cargo install --locked --force --git https://github.com/codonaft/broadcastr
 
 ## Run
 ```
-broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json
+broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json --read-relays wss://nostr.wine,wss://monitorlizard.nostr1.com,wss://relay.nostr.watch,wss://relaypag.es
 ```
 
 <details>
@@ -42,39 +42,41 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> --relays <relays> [--blocked-relays <blocked-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--allow-pubkeys <allow-pubkeys>] [--disable-mentions] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--allow-kinds <allow-kinds>] [--subscribe] [--detect-failing-relays] [--disable-gossip] [--disable-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--no-gossip] [--no-nip66] [--no-azzamo] [--detect-failing-relays] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
 Options:
   --listen          the listener ws URI (e.g. "ws://localhost:8080")
-  --relays          relays or relay-list URIs (comma-separated, e.g.
+  --relays          relays or dynamically refreshable relay-list URIs
+                    (comma-separated, e.g.
                     "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
-  --blocked-relays  same, but for ignored relays; put public URL to your
+  --read-relays     same, but for read-only relays; overrides entries of the
+                    write relays
+  --block-relays    same, but for ignored relays; put public URL to your
                     broadcastr here to avoid loops
   --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
                     "127.0.0.1:9050")
-  --proxy           connect to all relays using socks5 proxy
+  --proxy           make all connections using socks5 proxy
   --min-pow         pow difficulty limit (NIP-13)
-  --allow-pubkeys   authors or mentioned authors (comma-separated
+  --pubkeys         allow authors or mentioned authors only (comma-separated
                     hex/bech32/NIP-21 allow-list)
-  --disable-mentions
-                    disallow mentions (of the allowed authors) by others
-                    (default is false)
+  --no-mentions     disallow mentions (of the allowed authors) by others
+  --event-kinds     allow some event kinds only (comma-separated allow-list, e.g
+                    "0,1,3,5,6,7,4550,34550")
+  --subscribe       subscribe and automatically distribute events of the allowed
+                    authors and event kinds
   --max-events-by-author-per-min
                     limit events by author (default is 5)
   --max-events-by-ip-per-min
                     limit events by IP (default is 50)
-  --allow-kinds     limit event kinds with (comma-separated allow-list, e.g
-                    "0,1,3,5,6,7,4550,34550")
-  --subscribe       subscribe and automatically distribute events of the allowed
-                    authors and kinds
+  --no-gossip       don't discover additional relays from user profiles
+  --no-nip66        don't discover additional relays using NIP-66
+  --no-azzamo       don't use azzamo.net for spam filtering
   --detect-failing-relays
                     aggressively detect relays that can't receive relevant
                     events (may save some bandwidth in the long run but will
-                    consume more CPU, especially on start; default is false)
-  --disable-gossip  don't discover additional relays from user profiles
-  --disable-azzamo  don't use azzamo.net for spam filtering
+                    consume more CPU, especially on start)
   --update-interval relays and spam-lists update interval (default is 15m)
   --max-backoff-interval
                     max update backoff interval (default is 5m)
@@ -119,7 +121,7 @@ Options:
     - that closed connections after we sent them event?
     - option to disconnect after timeout?
     - [x] which are NIP-42-only ("auth-required"/"auth failed")
-    - [x] `Relay::ban()` relays that didn't receive the known kinds
+    - [x] ban relays that didn't receive the known kinds
     - [x] relays that fail due to TLS or DNS
   - make sure we don't attempt to connect to faulty relays
     - retry to connect with an exponential backoff?

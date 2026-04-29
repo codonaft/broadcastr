@@ -24,8 +24,8 @@ humantime = "2"
 log = "0.4"
 lru = "0.17"
 nonzero_ext = "0.3"
-nostr-relay-pool = "0.44"
-nostr-sdk = "0.44"
+nostr = { git = "https://github.com/rust-nostr/nostr", rev = "e2062e40048dd04236a46f8198fbe922679a1d35" }
+nostr-sdk = { git = "https://github.com/rust-nostr/nostr", rev = "e2062e40048dd04236a46f8198fbe922679a1d35" }
 reqwest = { version = "0.13", features = ["json", "socks"] }
 rustls = { version = "0.23", features = ["ring"] }
 serde = "1"
