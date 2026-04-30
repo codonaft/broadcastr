@@ -4,6 +4,7 @@ mod relay_lists;
 mod relays;
 mod spam;
 
+use crate::relays::Relays;
 use anyhow as ah;
 use argh::FromArgs;
 use backoff::{
@@ -231,9 +232,16 @@ async fn main() -> ah::Result<()> {
         nostr_client,
         policy,
         block_relays,
-        seen_nip11,
+        seen_relay_info,
         azzamo_block_pubkeys_sender,
     } = ClientAndPolicy::new(&args, connection)?;
+
+    let relays = Arc::new(relays::Relays {
+        nostr_client: nostr_client.clone(),
+        args: args.clone(),
+        policy: policy.clone(),
+        seen_relay_info,
+    });
 
     Toplevel::new({
         async move |s: &mut SubsystemHandle| {
@@ -249,17 +257,10 @@ async fn main() -> ah::Result<()> {
             s.start(SubsystemBuilder::new(
                 "main",
                 async move |subsys: &mut SubsystemHandle| {
-                    let listeners = new_listeners(&args).await?.into_iter().map(|listener| {
-                        serve(
-                            listener,
-                            ws_config,
-                            &args,
-                            &nostr_client,
-                            &policy,
-                            &block_relays,
-                            &seen_nip11,
-                        )
-                        .boxed()
+                    let relays = relays.clone();
+                    let listeners = new_listeners(&args).await?.into_iter().map({
+                        let relays = relays.clone();
+                        move |listener| serve(listener, ws_config, relays.clone()).boxed()
                     });
 
                     if let Err(e) = try_join_all(
@@ -269,14 +270,7 @@ async fn main() -> ah::Result<()> {
                                 ah::bail!("shutdown");
                             }
                             .boxed(),
-                            relays::updater(
-                                &block_relays,
-                                &seen_nip11,
-                                &args,
-                                &nostr_client,
-                                &policy,
-                            )
-                            .boxed(),
+                            relays::Relays::updater(relays).boxed(),
                             spam::azzamo_updater(&args, azzamo_block_pubkeys_sender).boxed(),
                         ]
                         .into_iter()
@@ -300,11 +294,7 @@ async fn main() -> ah::Result<()> {
 async fn serve(
     listener: TcpListener,
     ws_config: WebSocketConfig,
-    args: &Broadcastr,
-    nostr_client: &NostrClient,
-    policy: &Arc<Policy>,
-    block_relays: &Arc<RwLock<HashSet<Url>>>,
-    seen_nip11: &Arc<RwLock<HashSet<Url>>>,
+    relays: Arc<Relays>,
 ) -> ah::Result<()> {
     let relay_info = {
         let body = RelayInformationDocument {
@@ -329,11 +319,7 @@ async fn serve(
                     nostr_helpers::handle_ws_connection(
                         stream,
                         ws_config,
-                        args.clone(),
-                        nostr_client.clone(),
-                        policy.clone(),
-                        block_relays.clone(),
-                        seen_nip11.clone(),
+                        relays.clone(),
                         relay_info.clone(),
                     )
                     .map_err(move |e| {

@@ -1,5 +1,5 @@
 use super::Broadcastr;
-use crate::{policy::Policy, relays::spawn_handle_event};
+use crate::{policy::Policy, relays::Relays};
 use anyhow as ah;
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
@@ -34,11 +34,7 @@ struct ParsedHttpHeaders {
 pub(crate) async fn handle_ws_connection(
     mut stream: TcpStream,
     ws_config: WebSocketConfig,
-    args: Broadcastr,
-    nostr_client: NostrClient,
-    policy: Arc<Policy>,
-    block_relays: Arc<RwLock<HashSet<Url>>>,
-    seen_nip11: Arc<RwLock<HashSet<Url>>>,
+    relays: Arc<Relays>,
     relay_info: String,
 ) -> ah::Result<()> {
     let ParsedHttpHeaders { ws, ip } = parse_http_headers(&stream).await;
@@ -71,17 +67,7 @@ pub(crate) async fn handle_ws_connection(
     while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
         match ClientMessage::from_json(&text) {
             Ok(client_message) => {
-                handle_client_message(
-                    client_message,
-                    ip,
-                    &mut ws_sender,
-                    args.clone(),
-                    nostr_client.clone(),
-                    policy.clone(),
-                    block_relays.clone(),
-                    seen_nip11.clone(),
-                )
-                .await;
+                handle_client_message(client_message, ip, &mut ws_sender, relays.clone()).await;
             },
             Err(e) => {
                 log::debug!("failed to parse client message: {e}");
@@ -135,32 +121,18 @@ async fn handle_client_message(
     client_message: ClientMessage<'_>,
     ip: Option<IpAddr>,
     ws_sender: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
-    args: Broadcastr,
-    nostr_client: NostrClient,
-    policy: Arc<Policy>,
-    block_relays: Arc<RwLock<HashSet<Url>>>,
-    seen_nip11: Arc<RwLock<HashSet<Url>>>,
+    relays: Arc<Relays>,
 ) {
     use ClientMessage::*;
     match client_message {
         Event(event) => {
             let event = event.into_owned();
             let event_id = event.id;
-            let (success, message) = match spawn_handle_event(
-                &args,
-                &nostr_client,
-                event,
-                ip,
-                policy,
-                block_relays,
-                seen_nip11,
-                false,
-            )
-            .await
-            {
-                Ok(()) => (true, "".to_string()),
-                Err(e) => (false, format!("{e}")),
-            };
+            let (success, message) =
+                match Relays::spawn_handle_event(relays, event, ip, false).await {
+                    Ok(()) => (true, "".to_string()),
+                    Err(e) => (false, format!("{e}")),
+                };
             ok(event_id, success, &message, ws_sender).await;
         },
         Close(subscription_id) => closed(subscription_id, "close", ws_sender).await,

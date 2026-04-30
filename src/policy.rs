@@ -28,27 +28,27 @@ pub(crate) struct ClientAndPolicy {
     pub nostr_client: NostrClient,
     pub policy: Arc<Policy>,
     pub block_relays: Arc<RwLock<HashSet<Url>>>,
-    pub seen_nip11: Arc<RwLock<HashSet<Url>>>, // TODO: seen_relay_info
+    pub seen_relay_info: RwLock<HashSet<Url>>,
     pub azzamo_block_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct Policy {
-    policy: InnerPolicy,
-    seen_event_ids: Mutex<LruCache<EventId, ()>>,
-    events_by_author: RateLimitBy<PublicKey>,
-    events_by_ip: RateLimitBy<IpAddr>,
+    pub policy: InnerPolicy,
+    pub seen_event_ids: Mutex<LruCache<EventId, ()>>,
+    pub events_by_author: RateLimitBy<PublicKey>,
+    pub events_by_ip: RateLimitBy<IpAddr>,
 }
 
 // TODO: remove?
 #[derive(Debug, Clone)]
-struct InnerPolicy {
-    pubkeys: HashSet<PublicKey>,
-    no_mentions: bool,
-    kinds: HashSet<EventKind>,
-    min_pow: Option<u8>,
-    block_relays: Arc<RwLock<HashSet<Url>>>,
-    azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
+pub(crate) struct InnerPolicy {
+    pub pubkeys: HashSet<PublicKey>,
+    pub no_mentions: bool,
+    pub kinds: HashSet<EventKind>,
+    pub min_pow: Option<u8>,
+    pub block_relays: Arc<RwLock<HashSet<Url>>>,
+    pub azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
 }
 
 type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
@@ -56,7 +56,7 @@ type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
 impl ClientAndPolicy {
     pub(crate) fn new(args: &Broadcastr, connection: Connection) -> ah::Result<Self> {
         let block_relays = Arc::new(RwLock::new(HashSet::default()));
-        let seen_nip11 = Arc::new(RwLock::new(HashSet::default()));
+        let seen_relay_info = RwLock::new(HashSet::default());
         let (azzamo_block_pubkeys_sender, azzamo_block_pubkeys_receiver) =
             watch::channel(HashSet::default());
         let policy = InnerPolicy {
@@ -106,7 +106,7 @@ impl ClientAndPolicy {
             nostr_client,
             policy,
             block_relays,
-            seen_nip11,
+            seen_relay_info,
             azzamo_block_pubkeys_sender,
         })
     }
