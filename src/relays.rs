@@ -1,7 +1,8 @@
 use super::{Broadcastr, retry_with_backoff_endless};
-use crate::{Policy, normalize_url, relay_lists::RelayLists};
+use crate::{Policy, normalize_url, proxied_client_builder, relay_lists::RelayLists};
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
+use nostr::serde_json;
 use nostr::{
     Alphabet, Event, EventId, Filter, Kind as EventKind, RelayUrl, TagStandard, Timestamp,
     event::TagKind,
@@ -21,6 +22,15 @@ use tokio::{
 };
 
 const WEEK_SECS: u64 = 7 * 24 * 60 * 60;
+const FATAL_CONNECTION_ERRORS: [&str; 7] = [
+    "dns error",
+    "InvalidCertificate",
+    "ExpiredContext",
+    "UnrecognisedName",
+    "NotValidForNameContext",
+    "tls handshake eof",
+    "0.0.0.0:443",
+];
 
 #[derive(Debug)]
 pub(crate) struct Relays {
@@ -316,10 +326,6 @@ impl Relays {
         relays_without_event: HashSet<RelayUrl>,
         event: Event,
     ) {
-        if !this.args.detect_failing_relays {
-            return;
-        }
-
         join_all(relays_without_event.into_iter().map(async |relay_url| {
             let relay = this
                 .nostr_client
@@ -335,16 +341,18 @@ impl Relays {
                 return Ok(());
             }
 
+            let connect_timeout = this.args.connect_timeout.0;
             let connected_relay = tokio::spawn({
-                let connect_timeout = this.args.connect_timeout.0;
                 async move {
                     relay.wait_for_connection(connect_timeout).await;
                     relay
                 }
             });
 
-            log::debug!("checking relay info of {relay_url}");
+            log::debug!("discovering relay info for {relay_url}");
             let mut has_limitation = false;
+            let mut has_requirements = false;
+            let mut has_info_from_discovery = false;
             if let Some(relay_discovery) = this
                 .nostr_client
                 .fetch_events(
@@ -373,72 +381,120 @@ impl Relays {
                     .filter_map(|t| match t {
                         TagStandard::RelayRequirement(requirement) => Some(requirement),
                         _ => None,
-                    });
-                log::debug!(
-                    "relay {relay_url} requirements {:?}",
-                    requirements.collect::<Vec<_>>()
-                ); // TODO
+                    })
+                    .collect::<Vec<_>>();
+                log::debug!("relay {relay_url} requirements {requirements:?}");
+                has_limitation = requirements
+                    .iter()
+                    .any(|t| ["auth", "payment"].contains(&t.as_str()));
 
-                let mut requirements = event
-                    .tags
-                    .filter_standardized(TagKind::single_letter(Alphabet::R, true))
-                    .filter_map(|t| match t {
-                        TagStandard::RelayRequirement(requirement) => Some(requirement),
-                        _ => None,
-                    });
-                has_limitation = requirements.any(|t| ["auth", "payment"].contains(&t.as_str()));
+                let info_from_discovery =
+                    RelayInformationDocument::from_json(&relay_discovery.content);
 
-                if !has_limitation
-                    && let Ok(info) = RelayInformationDocument::from_json(&relay_discovery.content)
-                    && let Some(Limitation {
-                        auth_required,
-                        payment_required,
-                        restricted_writes,
-                        ..
-                    }) = info.limitation
-                {
-                    has_limitation = auth_required.unwrap_or_default()
-                        || payment_required.unwrap_or_default()
-                        || restricted_writes.unwrap_or_default()
+                if !has_limitation {
+                    has_limitation = has_publish_limitation(&info_from_discovery);
+                }
+
+                has_requirements = !requirements.is_empty();
+                has_info_from_discovery = info_from_discovery.is_ok();
+            }
+
+            if !has_limitation && !has_requirements && !has_info_from_discovery {
+                let relay = connected_relay.await?;
+                if relay.status() != RelayStatus::Connected {
+                    log::debug!("relay {relay_url} possibly failing");
+
+                    if this.args.no_nip11_requests {
+                        this.policy
+                            .block(&relay_url, "possible fatal connection failure")
+                            .await?;
+                        return Ok(());
+                    }
+
+                    let mut url = relay_url.as_str().parse::<Url>()?;
+                    url.set_scheme(match url.scheme() {
+                        "ws" => "http",
+                        "wss" => "https",
+                        _ => ah::bail!("unexpected scheme"),
+                    })
+                    .map_err(|e| ah::anyhow!("{e:?}"))?;
+
+                    let client = proxied_client_builder(&url, &this.args)?
+                        .tcp_keepalive(None)
+                        .build()?;
+
+                    let info = client
+                        .get(url)
+                        .header(reqwest::header::ACCEPT, "application/nostr+json")
+                        .send()
+                        .await;
+                    match info {
+                        Err(e) => {
+                            let text = format!("{e:?}");
+                            log::debug!("failed to retrieve relay info for {relay_url}: {text}");
+                            if FATAL_CONNECTION_ERRORS.iter().any(|i| text.contains(i)) {
+                                this.policy
+                                    .block(&relay_url, "fatal connection failure")
+                                    .await?;
+                                return Ok(());
+                            }
+                        },
+                        Ok(info) if info.status() == reqwest::StatusCode::OK => {
+                            let bytes = info.bytes().await?;
+                            let info_from_nip11 =
+                                serde_json::from_slice::<RelayInformationDocument>(&bytes);
+                            has_limitation = has_publish_limitation(&info_from_nip11);
+                        },
+                        Ok(info) => {
+                            let code = info.status();
+                            this.policy
+                                .block(&relay_url, &format!("unexpected status code {code}"))
+                                .await?;
+                        },
+                    }
                 }
             }
 
-            if !has_limitation {
-                return Ok(());
+            if has_limitation {
+                this.block_if_no_events_with_same_author(relay_url, &event)
+                    .await?;
             }
-
-            let mut authors: HashSet<PublicKey> = this.args.pubkeys.clone().unwrap_or_default().0;
-            authors.insert(event.pubkey);
-
-            let filter = Filter::new().limit(1).authors(authors);
-            let filters = [filter.clone(), filter.kind(event.kind)];
-
-            let relay = connected_relay.await?;
-            let found_event_with_same_author = relay
-                .fetch_events(filters)
-                .timeout(this.args.request_timeout.0)
-                .await
-                .ok()
-                .and_then(|i| i.first_owned())
-                .is_some();
-
-            if !found_event_with_same_author {
-                log::debug!(
-                    "blocking {relay_url} due to relay is limited and has no relevant events"
-                );
-                {
-                    this.policy
-                        .policy
-                        .block_relays
-                        .write()
-                        .await
-                        .insert(relay_url.into());
-                }
-                return Ok(());
-            }
-            Ok::<_, ah::Error>(())
+            Ok(())
         }))
         .await;
+    }
+
+    async fn block_if_no_events_with_same_author(
+        &self,
+        relay_url: RelayUrl,
+        event: &Event,
+    ) -> ah::Result<()> {
+        let mut authors: HashSet<PublicKey> = self.args.pubkeys.clone().unwrap_or_default().0;
+        authors.insert(event.pubkey);
+        let filter = Filter::new().limit(1).authors(authors);
+        let filters = [filter.clone(), filter.kind(event.kind)];
+
+        let relay = self
+            .nostr_client
+            .relay(&relay_url)
+            .await?
+            .context("relay_second_attempt")?;
+        relay.wait_for_connection(self.args.connect_timeout.0).await;
+
+        let found_event_with_same_author = relay
+            .fetch_events(filters)
+            .timeout(self.args.request_timeout.0)
+            .await
+            .ok()
+            .and_then(|i| i.first_owned())
+            .is_some();
+
+        if !found_event_with_same_author {
+            self.policy
+                .block(&relay_url, "relay is limited and has no relevant events")
+                .await?;
+        }
+        Ok(())
     }
 
     fn filter_in_update_interval(&self, age_secs: u64) -> Filter {
@@ -491,6 +547,25 @@ impl QueryEvent {
             found_on_relays,
             relays_without_event,
         })
+    }
+}
+
+fn has_publish_limitation(
+    info_from_discovery: &Result<RelayInformationDocument, serde_json::Error>,
+) -> bool {
+    if let Ok(info) = info_from_discovery
+        && let Some(Limitation {
+            auth_required,
+            payment_required,
+            restricted_writes,
+            ..
+        }) = info.limitation
+    {
+        auth_required.unwrap_or_default()
+            || payment_required.unwrap_or_default()
+            || restricted_writes.unwrap_or_default()
+    } else {
+        false
     }
 }
 

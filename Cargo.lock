@@ -233,7 +233,6 @@ dependencies = [
  "nostr-sdk",
  "reqwest",
  "rustls",
- "serde",
  "simplelog",
  "socket2",
  "tokio",

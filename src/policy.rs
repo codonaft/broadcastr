@@ -1,4 +1,4 @@
-use crate::{Broadcastr, UPDATE_INTERVAL};
+use crate::{Broadcastr, UPDATE_INTERVAL, normalize_url};
 use anyhow as ah;
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use lru::LruCache;
@@ -150,6 +150,13 @@ impl Policy {
     pub(crate) async fn forget(&self, id: EventId) {
         self.seen_event_ids.lock().await.pop(&id);
     }
+
+    pub(crate) async fn block(&self, relay_url: &RelayUrl, reason: &str) -> ah::Result<()> {
+        log::debug!("blocking {relay_url} due to {reason}");
+        let url = normalize_url(relay_url.as_str().parse()?)?;
+        self.policy.block_relays.write().await.insert(url);
+        Ok(())
+    }
 }
 
 impl InnerPolicy {
@@ -191,10 +198,14 @@ impl InnerPolicy {
     }
 
     async fn check_relay(&self, url: &RelayUrl) -> Result<AdmitStatus, PolicyError> {
-        let block_relays = { self.block_relays.read().await }
-            .iter()
-            .map(|i| i.as_str().parse().map_err(PolicyError::backend))
-            .collect::<Result<HashSet<RelayUrl>, PolicyError>>()?;
+        let block_relays = {
+            self.block_relays
+                .read()
+                .await
+                .iter()
+                .map(|i| i.as_str().parse().map_err(PolicyError::backend))
+                .collect::<Result<HashSet<RelayUrl>, PolicyError>>()?
+        };
 
         let result = if block_relays.contains(url) {
             AdmitStatus::Rejected {

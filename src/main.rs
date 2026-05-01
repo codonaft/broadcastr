@@ -42,7 +42,7 @@ struct Broadcastr {
     #[argh(option)]
     listen: Url,
 
-    /// relays or dynamically refreshable relay-list URIs
+    /// relays or relay-list URIs
     /// (comma-separated, e.g. "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
     #[argh(option)]
     relays: Option<Urls>,
@@ -110,10 +110,9 @@ struct Broadcastr {
     #[argh(switch)]
     no_azzamo: bool,
 
-    /// aggressively detect relays that can't receive relevant events
-    /// (may save some bandwidth in the long run but will consume more CPU, especially on start)
+    /// consume less CPU but block possibly failing relays more aggressively
     #[argh(switch)]
-    detect_failing_relays: bool,
+    no_nip11_requests: bool,
 
     /// relays and spam-lists update interval (default is 15m)
     #[argh(option, default = "DurationArg(UPDATE_INTERVAL)")]
