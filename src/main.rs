@@ -224,7 +224,7 @@ async fn main() -> ah::Result<()> {
     let ClientAndPolicy {
         nostr_client,
         policy,
-        seen_relay_info,
+        seen_relay_info_after_failure,
         azzamo_block_pubkeys_sender,
     } = ClientAndPolicy::new(&args, connection)?;
 
@@ -232,7 +232,7 @@ async fn main() -> ah::Result<()> {
         nostr_client: nostr_client.clone(),
         args: args.clone(),
         policy: policy.clone(),
-        seen_relay_info,
+        seen_relay_info_after_failure,
         nip66_discovered: Mutex::new(Default::default()),
     });
 

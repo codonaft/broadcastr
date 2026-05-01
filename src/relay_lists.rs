@@ -23,9 +23,9 @@ impl RelayLists {
 
         let discovered: HashSet<Url> = {
             let mut locked = relays.nip66_discovered.lock().await;
-            let d = locked.clone();
+            let value: HashSet<Url> = locked.clone();
             locked.clear();
-            d
+            value
         };
 
         let client_relays = relays.nostr_client.relays().await;

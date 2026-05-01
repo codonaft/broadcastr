@@ -3,7 +3,7 @@ use crate::{Policy, normalize_url, relay_lists::RelayLists};
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
 use nostr::{
-    Event, EventId, Filter, Kind as EventKind, RelayUrl, Timestamp,
+    Alphabet, Event, EventId, Filter, Kind as EventKind, RelayUrl, TagStandard, Timestamp,
     event::TagKind,
     key::PublicKey,
     nips::nip11::{Limitation, RelayInformationDocument},
@@ -14,20 +14,18 @@ use nostr_sdk::{
     relay::{RelayCapabilities, RelayStatus, ReqExitPolicy},
 };
 use reqwest::Url;
-use std::{borrow::Cow, collections::HashSet, net::IpAddr, ops::Sub, sync::Arc, time::Instant};
+use std::{collections::HashSet, net::IpAddr, ops::Sub, sync::Arc, time::Instant};
 use tokio::{
     sync::{Mutex, RwLock},
     time,
 };
-
-const RELAY_DISCOVERY: EventKind = EventKind::Custom(30166); // TODO: contribute?
 
 #[derive(Debug)]
 pub(crate) struct Relays {
     pub nostr_client: NostrClient,
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
-    pub seen_relay_info: RwLock<HashSet<Url>>,
+    pub seen_relay_info_after_failure: RwLock<HashSet<Url>>,
     pub nip66_discovered: Mutex<HashSet<Url>>,
 }
 
@@ -141,15 +139,17 @@ impl Relays {
             .filter(|(_, relay)| !relay.status().is_connected())
             .map(|(url, _)| url.to_string())
             .collect::<Vec<_>>();
-        let blocked_relays = { this.policy.policy.block_relays.read().await };
-        log::info!(
-            "currently connected to {connected_relays}/{} relays, disconnected from {}, {} are \
-             blocked",
-            client_relays.len(),
-            disconnected_relays.len(),
-            blocked_relays.len(),
-        );
-        log::debug!("reconnection took {elapsed}, blocked relays: {blocked_relays:?}");
+        {
+            let blocked_relays = this.policy.policy.block_relays.read().await;
+            log::info!(
+                "currently connected to {connected_relays}/{} relays, disconnected from {}, {} \
+                 are blocked",
+                client_relays.len(),
+                disconnected_relays.len(),
+                blocked_relays.len(),
+            );
+            log::debug!("reconnection took {elapsed}, blocked relays: {blocked_relays:?}");
+        };
     }
 
     fn spawn_relays_discovery(this: Arc<Self>) {
@@ -162,7 +162,7 @@ impl Relays {
             let start = Instant::now();
             let mut stream = this
                 .nostr_client
-                .stream_events(Filter::new().kind(RELAY_DISCOVERY))
+                .stream_events(Filter::new().kind(EventKind::RelayDiscovery))
                 .timeout(this.args.update_interval.0)
                 .policy(ReqExitPolicy::WaitDurationAfterEOSE(
                     this.args.update_interval.0,
@@ -328,9 +328,12 @@ impl Relays {
                 .relay(&relay_url)
                 .await?
                 .context("relay")?;
-            if relay.status() == RelayStatus::Banned || { this.seen_relay_info.read().await }
-                .contains(&relay_url.clone().into())
-            {
+            if relay.status() == RelayStatus::Banned || {
+                this.seen_relay_info_after_failure
+                    .read()
+                    .await
+                    .contains(&relay_url.clone().into())
+            } {
                 return Ok(());
             }
 
@@ -349,7 +352,7 @@ impl Relays {
                 .fetch_events(
                     Filter::new()
                         .limit(1)
-                        .kind(RELAY_DISCOVERY)
+                        .kind(EventKind::RelayDiscovery)
                         .identifier(relay_url.as_str()),
                 )
                 .timeout(this.args.request_timeout.0)
@@ -358,7 +361,7 @@ impl Relays {
                 .and_then(|i| i.first_owned())
             {
                 {
-                    this.seen_relay_info
+                    this.seen_relay_info_after_failure
                         .write()
                         .await
                         .insert(relay_url.clone().into());
@@ -366,17 +369,26 @@ impl Relays {
 
                 log::debug!("discovered relay info {relay_discovery:?}");
 
-                let tags = event
+                let requirements = event
                     .tags
-                    .filter(TagKind::Custom(Cow::Borrowed("R")))
-                    .flat_map(|t| t.content());
-                log::debug!("relay info tags {:?}", tags.collect::<Vec<_>>()); // TODO
+                    .filter_standardized(TagKind::single_letter(Alphabet::R, true))
+                    .filter_map(|t| match t {
+                        TagStandard::RelayRequirement(requirement) => Some(requirement),
+                        _ => None,
+                    });
+                log::debug!(
+                    "relay {relay_url} requirements {:?}",
+                    requirements.collect::<Vec<_>>()
+                ); // TODO
 
-                let mut tags = event
+                let mut requirements = event
                     .tags
-                    .filter(TagKind::Custom(Cow::Borrowed("R")))
-                    .flat_map(|t| t.content());
-                has_limitation = tags.any(|t| ["auth", "payment"].contains(&t));
+                    .filter_standardized(TagKind::single_letter(Alphabet::R, true))
+                    .filter_map(|t| match t {
+                        TagStandard::RelayRequirement(requirement) => Some(requirement),
+                        _ => None,
+                    });
+                has_limitation = requirements.any(|t| ["auth", "payment"].contains(&t.as_str()));
 
                 if !has_limitation
                     && let Ok(info) = RelayInformationDocument::from_json(&relay_discovery.content)
@@ -409,7 +421,7 @@ impl Relays {
                 .timeout(this.args.request_timeout.0)
                 .await
                 .ok()
-                .and_then(|i| i.first_owned()) // TODO: extract?
+                .and_then(|i| i.first_owned())
                 .is_some();
 
             if !found_event_with_same_author {

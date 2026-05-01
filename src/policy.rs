@@ -25,7 +25,7 @@ const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 pub(crate) struct ClientAndPolicy {
     pub nostr_client: NostrClient,
     pub policy: Arc<Policy>,
-    pub seen_relay_info: RwLock<HashSet<Url>>,
+    pub seen_relay_info_after_failure: RwLock<HashSet<Url>>,
     pub azzamo_block_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 }
 
@@ -102,7 +102,7 @@ impl ClientAndPolicy {
         Ok(Self {
             nostr_client,
             policy,
-            seen_relay_info,
+            seen_relay_info_after_failure: seen_relay_info,
             azzamo_block_pubkeys_sender,
         })
     }

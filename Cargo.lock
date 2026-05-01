@@ -1301,7 +1301,7 @@ checksum = "38bf9645c8b145698bb0b18a4637dcacbc421ea49bef2317e4fd8065a387cf21"
 [[package]]
 name = "nostr"
 version = "0.44.1"
-source = "git+https://github.com/rust-nostr/nostr?rev=e2062e40048dd04236a46f8198fbe922679a1d35#e2062e40048dd04236a46f8198fbe922679a1d35"
+source = "git+https://github.com/alopatindev/nostr?rev=a9c38d1e098153cd8a63c44b08b619c1e4480508#a9c38d1e098153cd8a63c44b08b619c1e4480508"
 dependencies = [
  "base64",
  "bech32",
@@ -1324,7 +1324,7 @@ dependencies = [
 [[package]]
 name = "nostr-database"
 version = "0.44.0"
-source = "git+https://github.com/rust-nostr/nostr?rev=e2062e40048dd04236a46f8198fbe922679a1d35#e2062e40048dd04236a46f8198fbe922679a1d35"
+source = "git+https://github.com/alopatindev/nostr?rev=a9c38d1e098153cd8a63c44b08b619c1e4480508#a9c38d1e098153cd8a63c44b08b619c1e4480508"
 dependencies = [
  "btreecap",
  "nostr",
@@ -1333,7 +1333,7 @@ dependencies = [
 [[package]]
 name = "nostr-gossip"
 version = "0.44.0"
-source = "git+https://github.com/rust-nostr/nostr?rev=e2062e40048dd04236a46f8198fbe922679a1d35#e2062e40048dd04236a46f8198fbe922679a1d35"
+source = "git+https://github.com/alopatindev/nostr?rev=a9c38d1e098153cd8a63c44b08b619c1e4480508#a9c38d1e098153cd8a63c44b08b619c1e4480508"
 dependencies = [
  "nostr",
 ]
@@ -1341,7 +1341,7 @@ dependencies = [
 [[package]]
 name = "nostr-sdk"
 version = "0.44.1"
-source = "git+https://github.com/rust-nostr/nostr?rev=e2062e40048dd04236a46f8198fbe922679a1d35#e2062e40048dd04236a46f8198fbe922679a1d35"
+source = "git+https://github.com/alopatindev/nostr?rev=a9c38d1e098153cd8a63c44b08b619c1e4480508#a9c38d1e098153cd8a63c44b08b619c1e4480508"
 dependencies = [
  "async-utility",
  "async-wsocket",
