@@ -1,21 +1,28 @@
 use super::{Broadcastr, retry_with_backoff_endless};
-use crate::nostr_helpers::has_publish_limitation;
-use crate::{Policy, normalize_url, proxied_client_builder, relay_lists::RelayLists};
+use crate::{
+    Policy, normalize_url, nostr_helpers::has_publish_limitation, policy::InnerPolicy,
+    proxied_client_builder, relay_lists::RelayLists,
+};
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
-use nostr::serde_json;
 use nostr::{
-    Alphabet, Event, EventId, Filter, Kind as EventKind, RelayUrl, TagStandard, Timestamp,
-    event::TagKind, key::PublicKey, nips::nip11::RelayInformationDocument, util::JsonUtil,
+    Alphabet, Event, EventId, Filter, Kind as EventKind, PublicKey, RelayUrl, TagStandard,
+    Timestamp, event::TagKind, nips::nip11::RelayInformationDocument, serde_json, util::JsonUtil,
 };
 use nostr_sdk::{
-    client::Client as NostrClient,
-    relay::{RelayCapabilities, RelayStatus, ReqExitPolicy},
+    client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
+    relay::{RelayCapabilities, RelayEventLimits, RelayLimits, RelayStatus, ReqExitPolicy},
 };
 use reqwest::Url;
-use std::{collections::HashSet, net::IpAddr, ops::Sub, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    net::IpAddr,
+    ops::Sub,
+    sync::Arc,
+    time::Instant,
+};
 use tokio::{
-    sync::{Mutex, RwLock},
+    sync::{Mutex, RwLock, watch},
     time,
 };
 
@@ -37,6 +44,11 @@ pub(crate) struct Relays {
     pub policy: Arc<Policy>,
     pub seen_relay_info_after_failure: RwLock<HashSet<Url>>,
     pub nip66_discovered: Mutex<HashSet<Url>>,
+}
+
+pub(crate) struct RelaysAndSenders {
+    pub relays: Arc<Relays>,
+    pub azzamo_block_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 }
 
 #[derive(Debug)]
@@ -514,6 +526,65 @@ impl Relays {
                 now.saturating_sub(interval).saturating_sub(age_secs),
             ))
             .until(Timestamp::from_secs(now.saturating_add(interval)))
+    }
+}
+
+impl RelaysAndSenders {
+    pub(crate) fn new(args: &Broadcastr, connection: Connection) -> ah::Result<Self> {
+        let block_relays = Arc::new(RwLock::new(HashSet::default()));
+        let seen_relay_info_after_failure = RwLock::new(HashSet::default());
+        let (azzamo_block_pubkeys_sender, azzamo_block_pubkeys_receiver) =
+            watch::channel(HashSet::default());
+
+        let policy = InnerPolicy::new(args, block_relays.clone(), azzamo_block_pubkeys_receiver);
+
+        let relay_limits = RelayLimits {
+            events: RelayEventLimits {
+                max_size: Some(args.max_msg_size as u32),
+                max_num_tags: Some(args.max_tags),
+                max_num_tags_per_kind: HashMap::from([(EventKind::ContactList, Some(u16::MAX))]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let nostr_client = NostrClient::builder()
+            // event signing is not supported
+            .automatic_authentication(false)
+            .gossip_config(GossipConfig {
+                limits: if args.no_gossip_discovery {
+                    GossipRelayLimits {
+                        read_relays_per_user: 0,
+                        write_relays_per_user: 0,
+                        hint_relays_per_user: 0,
+                        most_used_relays_per_user: 0,
+                        nip17_relays: 0,
+                    }
+                } else {
+                    GossipRelayLimits::default()
+                },
+                ..Default::default()
+            })
+            .relay_limits(relay_limits)
+            .max_relays(args.max_relays)
+            .connection(connection)
+            .ban_relay_on_mismatch(true)
+            .admit_policy(policy.clone())
+            .build();
+        let policy = Arc::new(Policy::new(policy, args));
+
+        let relays = Arc::new(Relays {
+            nostr_client: nostr_client.clone(),
+            args: args.clone(),
+            policy: policy.clone(),
+            seen_relay_info_after_failure,
+            nip66_discovered: Mutex::new(Default::default()),
+        });
+
+        Ok(Self {
+            relays,
+            azzamo_block_pubkeys_sender,
+        })
     }
 }
 

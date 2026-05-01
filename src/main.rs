@@ -4,7 +4,7 @@ mod relay_lists;
 mod relays;
 mod spam;
 
-use crate::relays::Relays;
+use crate::relays::{Relays, RelaysAndSenders};
 use anyhow as ah;
 use argh::FromArgs;
 use backoff::{
@@ -19,14 +19,14 @@ use log::LevelFilter;
 use nonzero_ext::*;
 use nostr::{JsonUtil, nips::nip11::RelayInformationDocument, types::Host};
 use nostr_sdk::client::{Connection, ConnectionTarget};
-use policy::{ClientAndPolicy, Policy};
+use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
     collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
 };
-use tokio::{net::TcpListener, sync::Mutex};
+use tokio::net::TcpListener;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tungstenite::protocol::WebSocketConfig;
 
@@ -220,22 +220,13 @@ async fn main() -> ah::Result<()> {
         connection
     };
 
-    let ClientAndPolicy {
-        nostr_client,
-        policy,
-        seen_relay_info_after_failure,
+    let RelaysAndSenders {
+        relays,
         azzamo_block_pubkeys_sender,
-    } = ClientAndPolicy::new(&args, connection)?;
-
-    let relays = Arc::new(Relays {
-        nostr_client: nostr_client.clone(),
-        args: args.clone(),
-        policy: policy.clone(),
-        seen_relay_info_after_failure,
-        nip66_discovered: Mutex::new(Default::default()),
-    });
+    } = RelaysAndSenders::new(&args, connection)?;
 
     Toplevel::new({
+        let nostr_client = relays.nostr_client.clone();
         async move |s: &mut SubsystemHandle| {
             s.start(SubsystemBuilder::new("shutdown", {
                 let nostr_client = nostr_client.clone();

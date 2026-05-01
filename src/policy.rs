@@ -6,32 +6,17 @@ use nostr::{
     Event, EventId, Kind as EventKind, PublicKey, RelayUrl, SubscriptionId, Timestamp,
     util::BoxedFuture,
 };
-use nostr_sdk::{
-    client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
-    prelude::{AdmitPolicy, AdmitStatus, PolicyError},
-    relay::{RelayEventLimits, RelayLimits},
-};
+use nostr_sdk::prelude::{AdmitPolicy, AdmitStatus, PolicyError};
 use reqwest::Url;
-use std::{
-    collections::{HashMap, HashSet},
-    net::IpAddr,
-    num::NonZeroUsize,
-    sync::Arc,
-};
+use std::{collections::HashSet, net::IpAddr, num::NonZeroUsize, sync::Arc};
 use tokio::sync::{Mutex, RwLock, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 
-pub(crate) struct ClientAndPolicy {
-    pub nostr_client: NostrClient,
-    pub policy: Arc<Policy>,
-    pub seen_relay_info_after_failure: RwLock<HashSet<Url>>,
-    pub azzamo_block_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
-}
-
+// TODO: rename
 #[derive(Debug)]
 pub(crate) struct Policy {
-    pub policy: InnerPolicy,
+    pub policy: InnerPolicy, // TODO: rename?
     pub seen_event_ids: Mutex<LruCache<EventId, ()>>,
     pub events_by_author: RateLimitBy<PublicKey>,
     pub events_by_ip: RateLimitBy<IpAddr>,
@@ -49,67 +34,8 @@ pub(crate) struct InnerPolicy {
 
 type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
 
-impl ClientAndPolicy {
-    pub(crate) fn new(args: &Broadcastr, connection: Connection) -> ah::Result<Self> {
-        let block_relays = Arc::new(RwLock::new(HashSet::default()));
-        let seen_relay_info = RwLock::new(HashSet::default());
-        let (azzamo_block_pubkeys_sender, azzamo_block_pubkeys_receiver) =
-            watch::channel(HashSet::default());
-        let policy = InnerPolicy {
-            pubkeys: args.pubkeys.clone().unwrap_or_default().0,
-            no_mentions: args.no_mentions,
-            kinds: args.event_kinds.clone().unwrap_or_default().0,
-            min_pow: args.min_pow,
-            block_relays: block_relays.clone(),
-            azzamo_block_pubkeys_receiver,
-        };
-
-        let relay_limits = RelayLimits {
-            events: RelayEventLimits {
-                max_size: Some(args.max_msg_size as u32),
-                max_num_tags: Some(args.max_tags),
-                max_num_tags_per_kind: HashMap::from([(EventKind::ContactList, Some(u16::MAX))]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let nostr_client = NostrClient::builder()
-            // event signing is not supported
-            .automatic_authentication(false)
-            .gossip_config(GossipConfig {
-                limits: if args.no_gossip_discovery {
-                    GossipRelayLimits {
-                        read_relays_per_user: 0,
-                        write_relays_per_user: 0,
-                        hint_relays_per_user: 0,
-                        most_used_relays_per_user: 0,
-                        nip17_relays: 0,
-                    }
-                } else {
-                    GossipRelayLimits::default()
-                },
-                ..Default::default()
-            })
-            .relay_limits(relay_limits)
-            .max_relays(args.max_relays)
-            .connection(connection)
-            .ban_relay_on_mismatch(true)
-            .admit_policy(policy.clone())
-            .build();
-        let policy = Arc::new(Policy::new(policy, args));
-
-        Ok(Self {
-            nostr_client,
-            policy,
-            seen_relay_info_after_failure: seen_relay_info,
-            azzamo_block_pubkeys_sender,
-        })
-    }
-}
-
 impl Policy {
-    fn new(policy: InnerPolicy, args: &Broadcastr) -> Self {
+    pub(crate) fn new(policy: InnerPolicy, args: &Broadcastr) -> Self {
         Self {
             policy,
             seen_event_ids: Mutex::new(LruCache::new(MAX_SEEN_EVENTS)),
@@ -160,6 +86,21 @@ impl Policy {
 }
 
 impl InnerPolicy {
+    pub(crate) fn new(
+        args: &Broadcastr,
+        block_relays: Arc<RwLock<HashSet<Url>>>,
+        azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
+    ) -> Self {
+        Self {
+            pubkeys: args.pubkeys.clone().unwrap_or_default().0,
+            no_mentions: args.no_mentions,
+            kinds: args.event_kinds.clone().unwrap_or_default().0,
+            min_pow: args.min_pow,
+            block_relays: block_relays.clone(),
+            azzamo_block_pubkeys_receiver,
+        }
+    }
+
     fn check_event(&self, event: &Event) -> ah::Result<()> {
         if let Some(min_pow) = self.min_pow
             && !event.check_pow(min_pow)
