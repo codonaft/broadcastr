@@ -6,6 +6,7 @@ use futures_util::stream::SplitSink;
 use httparse::Status;
 use nostr::{
     ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey, RelayMessage, SubscriptionId,
+    nips::nip11::{Limitation, RelayInformationDocument},
     serde_json,
 };
 use reqwest::header;
@@ -239,6 +240,25 @@ async fn send_relay_message(
     ws_sender.send(text).await.context("ws_sender.send")?;
     ws_sender.flush().await?;
     Ok(())
+}
+
+pub(crate) fn has_publish_limitation(
+    info_from_discovery: &Result<RelayInformationDocument, serde_json::Error>,
+) -> bool {
+    if let Ok(info) = info_from_discovery
+        && let Some(Limitation {
+            auth_required,
+            payment_required,
+            restricted_writes,
+            ..
+        }) = info.limitation
+    {
+        auth_required.unwrap_or_default()
+            || payment_required.unwrap_or_default()
+            || restricted_writes.unwrap_or_default()
+    } else {
+        false
+    }
 }
 
 impl FromStr for PublicKeys {

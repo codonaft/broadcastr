@@ -1,14 +1,12 @@
 use super::{Broadcastr, retry_with_backoff_endless};
+use crate::nostr_helpers::has_publish_limitation;
 use crate::{Policy, normalize_url, proxied_client_builder, relay_lists::RelayLists};
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
 use nostr::serde_json;
 use nostr::{
     Alphabet, Event, EventId, Filter, Kind as EventKind, RelayUrl, TagStandard, Timestamp,
-    event::TagKind,
-    key::PublicKey,
-    nips::nip11::{Limitation, RelayInformationDocument},
-    util::JsonUtil,
+    event::TagKind, key::PublicKey, nips::nip11::RelayInformationDocument, util::JsonUtil,
 };
 use nostr_sdk::{
     client::Client as NostrClient,
@@ -547,25 +545,6 @@ impl QueryEvent {
             found_on_relays,
             relays_without_event,
         })
-    }
-}
-
-fn has_publish_limitation(
-    info_from_discovery: &Result<RelayInformationDocument, serde_json::Error>,
-) -> bool {
-    if let Ok(info) = info_from_discovery
-        && let Some(Limitation {
-            auth_required,
-            payment_required,
-            restricted_writes,
-            ..
-        }) = info.limitation
-    {
-        auth_required.unwrap_or_default()
-            || payment_required.unwrap_or_default()
-            || restricted_writes.unwrap_or_default()
-    } else {
-        false
     }
 }
 
