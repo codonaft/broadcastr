@@ -22,7 +22,7 @@ governor = "0.10"
 httparse = "1"
 humantime = "2"
 log = "0.4"
-lru = "0.17"
+lru = "0.18"
 nonzero_ext = "0.3"
 nostr = { git = "https://github.com/alopatindev/nostr", rev = "a9c38d1e098153cd8a63c44b08b619c1e4480508" }
 nostr-sdk = { git = "https://github.com/alopatindev/nostr", rev = "a9c38d1e098153cd8a63c44b08b619c1e4480508" }
