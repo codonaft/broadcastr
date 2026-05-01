@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--no-gossip] [--no-nip66] [--no-azzamo] [--detect-failing-relays] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--max-relays <max-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--no-gossip] [--no-nip66] [--no-azzamo] [--detect-failing-relays] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -55,6 +55,7 @@ Options:
                     write relays
   --block-relays    same, but for ignored relays; put public URL to your
                     broadcastr here to avoid loops
+  --max-relays      limit the connection pool
   --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
                     "127.0.0.1:9050")
   --proxy           make all connections using socks5 proxy

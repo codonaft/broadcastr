@@ -12,6 +12,7 @@ use backoff::{
     future::{Retry, Sleeper},
 };
 use const_format::concatcp;
+use core::num::NonZeroUsize;
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use git_version::git_version;
 use log::LevelFilter;
@@ -32,8 +33,6 @@ use tungstenite::protocol::WebSocketConfig;
 pub(crate) const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 const MIN_SIZE: usize = 128;
-
-// TODO: limit total number of possible relays (max_relays)
 
 #[derive(FromArgs, Clone, Debug)]
 #[argh(help_triggers("-h", "--help"))]
@@ -56,6 +55,10 @@ struct Broadcastr {
     /// put public URL to your broadcastr here to avoid loops
     #[argh(option)]
     block_relays: Option<Urls>,
+
+    /// limit the connection pool
+    #[argh(option)]
+    max_relays: Option<NonZeroUsize>,
 
     /// connect to tor onion relays using socks5 proxy
     /// (e.g. "127.0.0.1:9050")

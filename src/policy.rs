@@ -92,6 +92,7 @@ impl ClientAndPolicy {
                 ..Default::default()
             })
             .relay_limits(relay_limits)
+            .max_relays(args.max_relays)
             .connection(connection)
             .ban_relay_on_mismatch(true)
             .admit_policy(policy.clone())
