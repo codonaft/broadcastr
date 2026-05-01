@@ -205,6 +205,10 @@ impl Relays {
                     {
                         log::debug!("discovering relay {url}");
                         discovered.insert(url);
+
+                        /* TODO check relay lists
+                        update them
+                        connect to the new relay */
                     }
                 } else {
                     break;

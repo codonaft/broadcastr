@@ -106,13 +106,13 @@ struct Broadcastr {
     #[argh(switch)]
     no_nip66_discovery: bool,
 
-    /// don't use azzamo.net for spam filtering
-    #[argh(switch)]
-    no_azzamo: bool,
-
     /// consume less CPU but block possibly failing relays more aggressively
     #[argh(switch)]
     no_nip11_requests: bool,
+
+    /// don't use azzamo.net for spam filtering
+    #[argh(switch)]
+    no_azzamo: bool,
 
     /// relays and spam-lists update interval (default is 15m)
     #[argh(option, default = "DurationArg(UPDATE_INTERVAL)")]
