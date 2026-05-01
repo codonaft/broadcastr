@@ -3,8 +3,8 @@ use anyhow as ah;
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use lru::LruCache;
 use nostr::{
-    Alphabet, Event, EventId, Kind as EventKind, PublicKey, RelayUrl, SingleLetterTag,
-    SubscriptionId, Tag, Timestamp, util::BoxedFuture,
+    Event, EventId, Kind as EventKind, PublicKey, RelayUrl, SubscriptionId, Timestamp,
+    util::BoxedFuture,
 };
 use nostr_sdk::{
     client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
@@ -209,9 +209,9 @@ impl InnerPolicy {
     fn mentions_allowed_pubkeys(&self, event: &Event) -> bool {
         event
             .tags
-            .iter()
-            .flat_map(mentioned_pubkey)
-            .any(|i| self.pubkeys.contains(&i))
+            .public_keys()
+            .find(|i| self.pubkeys.contains(i))
+            .is_some()
     }
 
     fn is_spam(&self, event: &Event) -> bool {
@@ -251,13 +251,4 @@ impl AdmitPolicy for InnerPolicy {
             Ok(AdmitStatus::Success)
         })
     }
-}
-
-fn mentioned_pubkey(tag: &Tag) -> Option<PublicKey> {
-    if tag.single_letter_tag() == Some(SingleLetterTag::lowercase(Alphabet::P))
-        && let Some(pubkey) = tag.content()
-    {
-        return pubkey.parse().ok();
-    }
-    None
 }
