@@ -69,10 +69,6 @@ struct Broadcastr {
     #[argh(option)]
     proxy: Option<SocketAddr>,
 
-    /// pow difficulty limit (NIP-13)
-    #[argh(option)]
-    min_pow: Option<u8>,
-
     /// allow authors or mentioned authors only (comma-separated hex/bech32/NIP-21 allow-list)
     #[argh(option)]
     pubkeys: Option<nostr_helpers::PublicKeys>,
@@ -98,11 +94,15 @@ struct Broadcastr {
     #[argh(option, default = "nonzero!(50u32)")]
     max_events_by_ip_per_min: NonZeroU32,
 
+    /// pow difficulty limit (NIP-13)
+    #[argh(option)]
+    min_pow: Option<u8>,
+
     /// don't discover additional relays from user profiles
     #[argh(switch)]
     no_gossip: bool,
 
-    /// don't discover additional relays using NIP-66
+    /// don't discover additional relays (NIP-66)
     #[argh(switch)]
     no_nip66: bool,
 
@@ -135,13 +135,17 @@ struct Broadcastr {
     #[argh(option, default = "LevelFilter::Info")]
     log_level: LevelFilter,
 
-    /// max incoming connections per listener IP address
-    #[argh(option, default = "1024")]
-    tcp_backlog: i32,
+    /// max tags allowed for non kind 3 events (default is 32)
+    #[argh(option, default = "32")]
+    max_tags: u16,
 
     /// event message size
     #[argh(option, default = "70 * 1024")]
     max_msg_size: usize,
+
+    /// max incoming connections per listener IP address
+    #[argh(option, default = "1024")]
+    tcp_backlog: i32,
 
     /// ws frame size
     #[argh(option, default = "4 * 70 * 1024")]

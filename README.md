@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--max-relays <max-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--min-pow <min-pow>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--no-gossip] [--no-nip66] [--no-azzamo] [--detect-failing-relays] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connection-timeout <connection-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--tcp-backlog <tcp-backlog>] [--max-msg-size <max-msg-size>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--max-relays <max-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--no-gossip] [--no-nip66] [--no-azzamo] [--detect-failing-relays] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--max-tags <max-tags>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -59,7 +59,6 @@ Options:
   --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
                     "127.0.0.1:9050")
   --proxy           make all connections using socks5 proxy
-  --min-pow         pow difficulty limit (NIP-13)
   --pubkeys         allow authors or mentioned authors only (comma-separated
                     hex/bech32/NIP-21 allow-list)
   --no-mentions     disallow mentions (of the allowed authors) by others
@@ -71,8 +70,9 @@ Options:
                     limit events by author (default is 5)
   --max-events-by-ip-per-min
                     limit events by IP (default is 50)
+  --min-pow         pow difficulty limit (NIP-13)
   --no-gossip       don't discover additional relays from user profiles
-  --no-nip66        don't discover additional relays using NIP-66
+  --no-nip66        don't discover additional relays (NIP-66)
   --no-azzamo       don't use azzamo.net for spam filtering
   --detect-failing-relays
                     aggressively detect relays that can't receive relevant
@@ -81,12 +81,12 @@ Options:
   --update-interval relays and spam-lists update interval (default is 15m)
   --max-backoff-interval
                     max update backoff interval (default is 5m)
-  --connection-timeout
-                    connection timeout (default is 15s)
+  --connect-timeout connection timeout (default is 15s)
   --request-timeout request timeout (default is 10s)
   --log-level       log level (default is info)
-  --tcp-backlog     max incoming connections per listener IP address
+  --max-tags        max tags allowed for non kind 3 events (default is 32)
   --max-msg-size    event message size
+  --tcp-backlog     max incoming connections per listener IP address
   --max-frame-size  ws frame size
   -h, --help        display usage information
 ```

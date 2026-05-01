@@ -67,7 +67,7 @@ impl ClientAndPolicy {
         let relay_limits = RelayLimits {
             events: RelayEventLimits {
                 max_size: Some(args.max_msg_size as u32),
-                max_num_tags: Some(32), // TODO: arg
+                max_num_tags: Some(args.max_tags),
                 max_num_tags_per_kind: HashMap::from([(EventKind::ContactList, Some(u16::MAX))]),
                 ..Default::default()
             },
