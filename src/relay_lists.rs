@@ -13,7 +13,6 @@ pub(crate) struct RelayLists {
     pub read_write: HashSet<Url>,
     pub read: HashSet<Url>,
     pub block: HashSet<Url>,
-    pub nip66_discovered: HashSet<Url>, // TODO: remove?
     pub client_relays: HashSet<RelayUrl>,
 }
 
@@ -21,24 +20,15 @@ impl RelayLists {
     pub(crate) async fn new(relays: &Relays) -> ah::Result<Self> {
         let args = &relays.args;
 
-        let discovered: HashSet<Url> = {
-            let mut locked = relays.nip66_discovered.lock().await;
-            let value: HashSet<Url> = locked.clone();
-            locked.clear();
-            value
-        };
-
         let client_relays = relays.nostr_client.relays().await;
-        let nip66_discovered = discovered.sub(
-            &client_relays
-                .keys()
-                .map(|i| normalize_url(i.as_str().parse()?))
-                .collect::<ah::Result<HashSet<_>>>()?,
-        );
-
         let banned = client_relays
             .values()
             .filter(|i| i.status() == RelayStatus::Banned)
+            .map(|i| normalize_url(i.url().as_str().parse()?))
+            .collect::<ah::Result<HashSet<Url>>>()?;
+        let discovered = client_relays
+            .values()
+            .filter(|i| i.status() != RelayStatus::Banned)
             .map(|i| normalize_url(i.url().as_str().parse()?))
             .collect::<ah::Result<HashSet<Url>>>()?;
 
@@ -48,7 +38,7 @@ impl RelayLists {
             .as_ref()
             .unwrap_or(&empty)
             .0
-            .union(&nip66_discovered)
+            .union(&discovered)
             .cloned()
             .collect();
         let read = &args.read_relays.as_ref().unwrap_or(&empty).0;
@@ -84,7 +74,6 @@ impl RelayLists {
             read_write,
             read,
             block,
-            nip66_discovered,
             client_relays: client_relays.into_keys().collect(),
         })
     }
@@ -117,7 +106,6 @@ impl RelayLists {
                 }
                 .into_iter()
                 .map(|i| normalize_url(i.parse()?));
-                log::debug!("fetched {} relays from {uri}", result.len());
                 Ok(result)
             });
         let result = try_join_all(futures)
@@ -126,5 +114,9 @@ impl RelayLists {
             .flatten()
             .collect::<ah::Result<HashSet<Url>>>()?;
         Ok(result)
+    }
+
+    pub(crate) fn contains(&self, url: &Url) -> bool {
+        self.read_write.contains(url) || self.read.contains(url) || self.block.contains(url)
     }
 }

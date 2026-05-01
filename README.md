@@ -132,6 +132,7 @@ Options:
 - [x] remove `spam.nostr.band`?
 - ~~login to NIP-42 relays?~~
   - does it make sense transmitting someone else's events from a generated `nsec`?
+- [ ] endpoint that returns a healthy relays list?
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.

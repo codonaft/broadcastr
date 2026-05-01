@@ -11,7 +11,10 @@ use nostr::{
 };
 use nostr_sdk::{
     client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
-    relay::{RelayCapabilities, RelayEventLimits, RelayLimits, RelayStatus, ReqExitPolicy},
+    relay::{
+        Error as RelayError, RelayCapabilities, RelayEventLimits, RelayLimits, RelayStatus,
+        ReqExitPolicy,
+    },
 };
 use reqwest::Url;
 use std::{
@@ -22,7 +25,7 @@ use std::{
     time::Instant,
 };
 use tokio::{
-    sync::{Mutex, RwLock, watch},
+    sync::{RwLock, watch},
     time,
 };
 
@@ -43,7 +46,6 @@ pub(crate) struct Relays {
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
     pub seen_relay_info_after_failure: RwLock<HashSet<Url>>,
-    pub nip66_discovered: Mutex<HashSet<Url>>,
 }
 
 pub(crate) struct RelaysAndSenders {
@@ -57,6 +59,12 @@ struct QueryEvent {
     relays_without_event: HashSet<RelayUrl>,
 }
 
+#[derive(Debug)]
+struct Caps {
+    read: RelayCapabilities,
+    read_write: RelayCapabilities,
+}
+
 impl Relays {
     pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
         let mut interval = time::interval(this.args.update_interval.0);
@@ -65,46 +73,31 @@ impl Relays {
             retry_with_backoff_endless(this.args.clone(), || {
                 let this = this.clone();
                 async move {
-                    let result = Self::update_relays(&this).await;
-                    if let Err(e) = &result {
+                    let relay_lists = Self::update_relays(&this).await;
+                    if let Err(e) = &relay_lists {
                         log::error!("failed to update relays: {e}");
                     }
                     Self::update_connections(&this).await;
-                    Self::spawn_relays_discovery(this.clone());
+                    Self::spawn_relays_discovery(this.clone(), relay_lists);
                     Self::update_subscription(this).await?;
-                    Ok(result?)
+                    Ok(())
                 }
             })
             .await?;
         }
     }
 
-    async fn update_relays(this: &Arc<Self>) -> ah::Result<()> {
+    async fn update_relays(this: &Arc<Self>) -> ah::Result<RelayLists> {
         log::info!("updating relays");
-
-        let discovery_flag = if this.args.no_gossip_discovery {
-            RelayCapabilities::NONE
-        } else {
-            RelayCapabilities::DISCOVERY
-        };
-        let read_capabilities = discovery_flag | RelayCapabilities::READ;
-        let read_write_capabilities = read_capabilities | RelayCapabilities::WRITE;
 
         let RelayLists {
             read_write,
             read,
             block,
-            nip66_discovered,
             client_relays,
         } = RelayLists::new(this).await?;
 
-        if !nip66_discovered.is_empty() {
-            let discovered = nip66_discovered
-                .iter()
-                .map(|i| i.as_str())
-                .collect::<Vec<_>>();
-            log::info!("discovered new relays {discovered:?}");
-        }
+        let caps = this.capabilities();
 
         if read_write.is_empty() && read.is_empty() && !block.is_empty() {
             let mut writer = this.policy.policy.block_relays.write().await;
@@ -127,7 +120,7 @@ impl Relays {
         for i in &read_write {
             this.nostr_client
                 .add_relay(RelayUrl::parse(i.as_str())?)
-                .capabilities(read_write_capabilities)
+                .capabilities(caps.read_write)
                 .await?;
         }
 
@@ -138,12 +131,17 @@ impl Relays {
             }
             this.nostr_client
                 .add_relay(url)
-                .capabilities(read_capabilities)
+                .capabilities(caps.read)
                 .await?;
         }
 
         log::debug!("finished updating relays");
-        Ok(())
+        Ok(RelayLists {
+            read_write,
+            read,
+            block,
+            client_relays,
+        })
     }
 
     async fn update_connections(this: &Arc<Self>) {
@@ -178,13 +176,15 @@ impl Relays {
         };
     }
 
-    fn spawn_relays_discovery(this: Arc<Self>) {
+    // TODO: make one endless loop
+    fn spawn_relays_discovery(this: Arc<Self>, relay_lists: ah::Result<RelayLists>) {
         if this.args.no_nip66_discovery {
             return;
         }
 
         tokio::spawn(async move {
             log::info!("discovering relays");
+            let relay_lists = relay_lists?;
             let start = Instant::now();
             let timeout = this.args.update_interval.0;
             let mut stream = this
@@ -197,29 +197,31 @@ impl Relays {
                 .policy(ReqExitPolicy::WaitDurationAfterEOSE(timeout))
                 .await?;
 
-            let mut discovered = HashSet::<Url>::default();
-            while let Some((_, event)) = stream.next().await {
-                if let Ok(event) = event {
-                    if let Some(Ok(url)) =
-                        event.tags.identifier().map(|i| normalize_url(i.parse()?))
-                    {
-                        log::debug!("discovering relay {url}");
-                        discovered.insert(url);
+            let Caps { read_write, .. } = this.capabilities();
 
-                        /* TODO check relay lists
-                        update them
-                        connect to the new relay */
-                    }
-                } else {
-                    break;
+            let mut discovered = 0;
+            while let Some((stream_relay_url, stream_event)) = stream.next().await {
+                match stream_event {
+                    Ok(event) => {
+                        if let Some(Ok(url)) =
+                            event.tags.identifier().map(|i| normalize_url(i.parse()?))
+                            && !relay_lists.contains(&url)
+                        {
+                            log::debug!("discovering relay {url}");
+                            this.nostr_client
+                                .add_relay(RelayUrl::parse(url.as_str())?)
+                                .capabilities(read_write)
+                                .await?;
+                            discovered += 1;
+                        }
+                    },
+                    Err(e) => {
+                        this.handle_relay_error(e, &stream_relay_url).await?;
+                    },
                 }
             }
 
-            {
-                this.nip66_discovered.lock().await.extend(discovered);
-            }
-
-            log::info!("discovering finished after {}", elapsed(start));
+            log::info!("discovered {discovered} new relays in {}", elapsed(start));
             Ok::<_, ah::Error>(())
         });
     }
@@ -250,10 +252,16 @@ impl Relays {
                 .policy(ReqExitPolicy::WaitDurationAfterEOSE(timeout))
                 .await?;
 
-            while let Some((_, event)) = stream.next().await {
-                let event = event?;
-                log::debug!("received event {} from subscription", event.id);
-                let _ = Self::spawn_handle_event(this.clone(), event, None, true).await;
+            while let Some((stream_relay_url, stream_event)) = stream.next().await {
+                match stream_event {
+                    Ok(event) => {
+                        log::debug!("received event {} from subscription", event.id);
+                        let _ = Self::spawn_handle_event(this.clone(), event, None, true).await;
+                    },
+                    Err(e) => {
+                        this.handle_relay_error(e, &stream_relay_url).await?;
+                    },
+                }
             }
 
             log::info!("closed all subscriptions after {}", elapsed(start));
@@ -430,8 +438,7 @@ impl Relays {
                     log::debug!("relay {relay_url} possibly failing");
 
                     if this.args.no_nip11_requests {
-                        this.policy
-                            .block(&relay_url, "possible fatal connection failure")
+                        this.block(&relay_url, "possible fatal connection failure")
                             .await?;
                         return Ok(());
                     }
@@ -458,9 +465,7 @@ impl Relays {
                             let text = format!("{e:?}");
                             log::debug!("failed to retrieve relay info for {relay_url}: {text}");
                             if FATAL_CONNECTION_ERRORS.iter().any(|i| text.contains(i)) {
-                                this.policy
-                                    .block(&relay_url, "fatal connection failure")
-                                    .await?;
+                                this.block(&relay_url, "fatal connection failure").await?;
                                 return Ok(());
                             }
                         },
@@ -472,8 +477,7 @@ impl Relays {
                         },
                         Ok(info) => {
                             let code = info.status();
-                            this.policy
-                                .block(&relay_url, &format!("unexpected status code {code}"))
+                            this.block(&relay_url, &format!("unexpected status code {code}"))
                                 .await?;
                         },
                     }
@@ -515,8 +519,7 @@ impl Relays {
             .is_some();
 
         if !found_event_with_same_author {
-            self.policy
-                .block(&relay_url, "relay is limited and has no relevant events")
+            self.block(&relay_url, "relay is limited and has no relevant events")
                 .await?;
         }
         Ok(())
@@ -530,6 +533,41 @@ impl Relays {
                 now.saturating_sub(interval).saturating_sub(age_secs),
             ))
             .until(Timestamp::from_secs(now.saturating_add(interval)))
+    }
+
+    fn capabilities(&self) -> Caps {
+        let discovery_flag = if self.args.no_gossip_discovery {
+            RelayCapabilities::NONE
+        } else {
+            RelayCapabilities::DISCOVERY
+        };
+        let read_capabilities = discovery_flag | RelayCapabilities::READ;
+        let read_write_capabilities = read_capabilities | RelayCapabilities::WRITE;
+        Caps {
+            read: read_capabilities,
+            read_write: read_write_capabilities,
+        }
+    }
+
+    async fn handle_relay_error(&self, err: RelayError, relay_url: &RelayUrl) -> ah::Result<()> {
+        if let RelayError::RelayMessage(text) = err {
+            for reason in ["auth-required", "blocked", "restricted"] {
+                if text.contains(reason) {
+                    self.block(relay_url, reason).await?;
+                    break;
+                }
+            }
+        } else {
+            log::info!("relay {relay_url} answered {err:?}");
+        }
+        Ok(())
+    }
+
+    async fn block(&self, relay_url: &RelayUrl, reason: &str) -> ah::Result<()> {
+        log::debug!("blocking {relay_url} due to {reason}");
+        self.policy.block(relay_url).await?;
+        let _ = self.nostr_client.remove_relay(relay_url).force().await;
+        Ok(())
     }
 }
 
@@ -582,7 +620,6 @@ impl RelaysAndSenders {
             args: args.clone(),
             policy: policy.clone(),
             seen_relay_info_after_failure,
-            nip66_discovered: Mutex::new(Default::default()),
         });
 
         Ok(Self {

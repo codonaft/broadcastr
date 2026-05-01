@@ -77,8 +77,7 @@ impl Policy {
         self.seen_event_ids.lock().await.pop(&id);
     }
 
-    pub(crate) async fn block(&self, relay_url: &RelayUrl, reason: &str) -> ah::Result<()> {
-        log::debug!("blocking {relay_url} due to {reason}");
+    pub(crate) async fn block(&self, relay_url: &RelayUrl) -> ah::Result<()> {
         let url = normalize_url(relay_url.as_str().parse()?)?;
         self.policy.block_relays.write().await.insert(url);
         Ok(())
