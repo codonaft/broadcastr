@@ -413,20 +413,6 @@ where
     bf::future::retry(backoff, f)
 }
 
-fn retry_with_backoff<F, Fut>(
-    args: &Broadcastr,
-    f: F,
-) -> Retry<impl Sleeper, ExponentialBackoff, impl Notify<ah::Error>, F, Fut>
-where
-    Fut: Future<Output = Result<(), bf::Error<ah::Error>>> + Send,
-    F: Fn() -> Fut + Send,
-{
-    let backoff = ExponentialBackoffBuilder::new()
-        .with_max_elapsed_time(Some(args.max_backoff_interval.0))
-        .build();
-    bf::future::retry(backoff, f)
-}
-
 impl FromStr for Urls {
     type Err = String;
 

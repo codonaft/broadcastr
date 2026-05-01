@@ -76,7 +76,7 @@ impl Relays {
             block,
             nip66_discovered,
             client_relays,
-        } = RelayLists::new(&this).await?;
+        } = RelayLists::new(this).await?;
 
         if !nip66_discovered.is_empty() {
             log::info!("discovered new relays {nip66_discovered:?}");
@@ -370,7 +370,7 @@ impl Relays {
                     .tags
                     .filter(TagKind::Custom(Cow::Borrowed("R")))
                     .flat_map(|t| t.content());
-                dbg!(tags.collect::<Vec<_>>()); // TODO
+                log::debug!("relay info tags {:?}", tags.collect::<Vec<_>>()); // TODO
 
                 let mut tags = event
                     .tags
@@ -380,18 +380,16 @@ impl Relays {
 
                 if !has_limitation
                     && let Ok(info) = RelayInformationDocument::from_json(&relay_discovery.content)
-                {
-                    if let Some(Limitation {
+                    && let Some(Limitation {
                         auth_required,
                         payment_required,
                         restricted_writes,
                         ..
                     }) = info.limitation
-                    {
-                        has_limitation = auth_required.unwrap_or_default()
-                            || payment_required.unwrap_or_default()
-                            || restricted_writes.unwrap_or_default()
-                    }
+                {
+                    has_limitation = auth_required.unwrap_or_default()
+                        || payment_required.unwrap_or_default()
+                        || restricted_writes.unwrap_or_default()
                 }
             }
 
