@@ -2,7 +2,7 @@ use crate::relays::Relays;
 
 use super::{Broadcastr, normalize_url};
 use anyhow::{self as ah, Context};
-use futures::future::try_join_all;
+use futures::future::{join_all, try_join_all};
 use nostr::{RelayUrl, serde_json};
 use nostr_sdk::relay::RelayStatus;
 use reqwest::{ClientBuilder, Url};
@@ -13,7 +13,7 @@ pub(crate) struct RelayLists {
     pub read_write: HashSet<Url>,
     pub read: HashSet<Url>,
     pub block: HashSet<Url>,
-    pub nip66_discovered: HashSet<Url>,
+    pub nip66_discovered: HashSet<Url>, // TODO: remove?
     pub client_relays: HashSet<RelayUrl>,
 }
 
@@ -61,17 +61,20 @@ impl RelayLists {
             .cloned()
             .collect();
 
-        let futures = [read_write, read, block]
+        let futures = [read_write, read, block].into_iter().map(async |list| {
+            Self::fetch_and_parse(list, args).await.map_err(|e| {
+                log::error!("fetch_and_parse {list:?}: {e:?}");
+                e
+            })
+        });
+        let mut lists = join_all(futures)
+            .await
             .into_iter()
-            .map(async |list| Self::fetch_and_parse(list, args).await);
-        let mut lists = try_join_all(futures)
-            .await?
-            .into_iter()
-            .collect::<Vec<HashSet<Url>>>();
+            .collect::<Vec<ah::Result<HashSet<Url>>>>();
 
-        let mut block = lists.pop().context("blocked")?;
-        let read = lists.pop().context("read")?;
-        let read_write = lists.pop().context("read_write")?;
+        let mut block = lists.pop().context("blocked")?.unwrap_or_default();
+        let read = lists.pop().context("read")?.unwrap_or_default();
+        let read_write = lists.pop().context("read_write")?.unwrap_or_default();
 
         block.extend(banned);
         let read_write = read_write.sub(&block).sub(&read);
