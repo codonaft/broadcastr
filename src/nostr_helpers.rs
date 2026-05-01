@@ -1,18 +1,16 @@
-use super::Broadcastr;
-use crate::{policy::Policy, relays::Relays};
+use crate::relays::Relays;
 use anyhow as ah;
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use futures_util::stream::SplitSink;
 use httparse::Status;
 use nostr::{
-    ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey, RelayMessage, RelayUrl,
-    SubscriptionId, serde_json,
+    ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey, RelayMessage, SubscriptionId,
+    serde_json,
 };
-use nostr_sdk::client::Client as NostrClient;
-use reqwest::{Url, header};
+use reqwest::header;
 use std::{borrow::Cow, collections::HashSet, net::IpAddr, str::FromStr, sync::Arc};
-use tokio::{io::AsyncWriteExt, net::TcpStream, sync::RwLock};
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
 use tungstenite::{
     handshake::server::{Request, Response},

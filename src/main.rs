@@ -16,32 +16,20 @@ use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use git_version::git_version;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::{
-    JsonUtil, Kind as EventKind, RelayUrl, nips::nip11::RelayInformationDocument, types::Host,
-};
-use nostr_sdk::{
-    client::{
-        Client as NostrClient, Connection, ConnectionTarget, GossipConfig, GossipRelayLimits,
-    },
-    relay::{RelayEventLimits, RelayLimits},
-};
+use nostr::{JsonUtil, nips::nip11::RelayInformationDocument, types::Host};
+use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::{ClientAndPolicy, Policy};
 use reqwest::{ClientBuilder, Proxy, Url};
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
-    collections::{HashMap, HashSet},
-    net::SocketAddr,
-    num::NonZeroU32,
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
+    collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
 };
-use tokio::{net::TcpListener, sync::RwLock};
+use tokio::{net::TcpListener, sync::Mutex};
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tungstenite::protocol::WebSocketConfig;
 
-pub const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
+pub(crate) const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 const MIN_SIZE: usize = 128;
 
@@ -231,16 +219,16 @@ async fn main() -> ah::Result<()> {
     let ClientAndPolicy {
         nostr_client,
         policy,
-        block_relays,
         seen_relay_info,
         azzamo_block_pubkeys_sender,
     } = ClientAndPolicy::new(&args, connection)?;
 
-    let relays = Arc::new(relays::Relays {
+    let relays = Arc::new(Relays {
         nostr_client: nostr_client.clone(),
         args: args.clone(),
         policy: policy.clone(),
         seen_relay_info,
+        nip66_discovered: Mutex::new(Default::default()),
     });
 
     Toplevel::new({
@@ -270,7 +258,7 @@ async fn main() -> ah::Result<()> {
                                 ah::bail!("shutdown");
                             }
                             .boxed(),
-                            relays::Relays::updater(relays).boxed(),
+                            Relays::updater(relays).boxed(),
                             spam::azzamo_updater(&args, azzamo_block_pubkeys_sender).boxed(),
                         ]
                         .into_iter()

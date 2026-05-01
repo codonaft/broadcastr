@@ -1,38 +1,41 @@
-use super::{Broadcastr, normalize_url, retry_with_backoff_endless};
-use crate::{Policy, proxied_client_builder, retry_with_backoff};
+use crate::relays::Relays;
+
+use super::{Broadcastr, normalize_url};
 use anyhow::{self as ah, Context};
-use backoff as bf;
-use futures::{
-    StreamExt,
-    future::{join_all, try_join_all},
-};
-use nostr::{Event, EventId, Filter, RelayUrl, Timestamp, serde_json};
-use nostr_sdk::{client::Client as NostrClient, relay::RelayStatus};
+use futures::future::try_join_all;
+use nostr::{RelayUrl, serde_json};
+use nostr_sdk::relay::RelayStatus;
 use reqwest::{ClientBuilder, Url};
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    net::IpAddr,
-    ops::Sub,
-    sync::Arc,
-    time::Instant,
-};
-use tokio::{
-    sync::{RwLock, watch},
-    time,
-};
+use std::{collections::HashSet, fs::File, ops::Sub, sync::Arc};
 
 #[derive(Debug)]
 pub(crate) struct RelayLists {
-    pub(crate) read_write: HashSet<Url>,
-    pub(crate) read: HashSet<Url>,
-    pub(crate) block: HashSet<Url>,
-    pub(crate) client_relays: HashSet<RelayUrl>,
+    pub read_write: HashSet<Url>,
+    pub read: HashSet<Url>,
+    pub block: HashSet<Url>,
+    pub nip66_discovered: HashSet<Url>,
+    pub client_relays: HashSet<RelayUrl>,
 }
 
 impl RelayLists {
-    pub(crate) async fn new(args: &Broadcastr, nostr_client: &NostrClient) -> ah::Result<Self> {
-        let client_relays = nostr_client.relays().await;
+    pub(crate) async fn new(relays: &Arc<Relays>) -> ah::Result<Self> {
+        let args = &relays.args;
+
+        let discovered: HashSet<Url> = {
+            let mut locked = relays.nip66_discovered.lock().await;
+            let d = locked.clone();
+            locked.clear();
+            d
+        };
+
+        let client_relays = relays.nostr_client.relays().await;
+        let nip66_discovered = discovered.sub(
+            &client_relays
+                .keys()
+                .map(|i| normalize_url(i.as_str().parse()?))
+                .collect::<ah::Result<HashSet<_>>>()?,
+        );
+
         let banned = client_relays
             .values()
             .filter(|i| i.status() == RelayStatus::Banned)
@@ -40,7 +43,14 @@ impl RelayLists {
             .collect::<ah::Result<HashSet<Url>>>()?;
 
         let empty = Default::default();
-        let read_write = &args.relays.as_ref().unwrap_or(&empty).0;
+        let read_write = &args
+            .relays
+            .as_ref()
+            .unwrap_or(&empty)
+            .0
+            .union(&nip66_discovered)
+            .cloned()
+            .collect();
         let read = &args.read_relays.as_ref().unwrap_or(&empty).0;
         let block = &args
             .block_relays
@@ -50,8 +60,6 @@ impl RelayLists {
             .union(&banned)
             .cloned()
             .collect();
-
-        // TODO: if link is down all relays will be blocked?
 
         let futures = [read_write, read, block]
             .into_iter()
@@ -73,6 +81,7 @@ impl RelayLists {
             read_write,
             read,
             block,
+            nip66_discovered,
             client_relays: client_relays.into_keys().collect(),
         })
     }

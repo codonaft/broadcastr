@@ -7,9 +7,7 @@ use nostr::{
     SubscriptionId, Tag, Timestamp, util::BoxedFuture,
 };
 use nostr_sdk::{
-    client::{
-        Client as NostrClient, Connection, ConnectionTarget, GossipConfig, GossipRelayLimits,
-    },
+    client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
     prelude::{AdmitPolicy, AdmitStatus, PolicyError},
     relay::{RelayEventLimits, RelayLimits},
 };
@@ -27,7 +25,6 @@ const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 pub(crate) struct ClientAndPolicy {
     pub nostr_client: NostrClient,
     pub policy: Arc<Policy>,
-    pub block_relays: Arc<RwLock<HashSet<Url>>>,
     pub seen_relay_info: RwLock<HashSet<Url>>,
     pub azzamo_block_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 }
@@ -40,7 +37,6 @@ pub(crate) struct Policy {
     pub events_by_ip: RateLimitBy<IpAddr>,
 }
 
-// TODO: remove?
 #[derive(Debug, Clone)]
 pub(crate) struct InnerPolicy {
     pub pubkeys: HashSet<PublicKey>,
@@ -105,7 +101,6 @@ impl ClientAndPolicy {
         Ok(Self {
             nostr_client,
             policy,
-            block_relays,
             seen_relay_info,
             azzamo_block_pubkeys_sender,
         })

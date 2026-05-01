@@ -1,46 +1,26 @@
 use super::{Broadcastr, retry_with_backoff_endless};
-use crate::{Policy, proxied_client_builder, relay_lists::RelayLists, retry_with_backoff};
+use crate::{Policy, normalize_url, relay_lists::RelayLists};
 use anyhow::{self as ah, Context};
-use backoff as bf;
-use futures::{
-    StreamExt,
-    future::{join_all, try_join_all},
-};
+use futures::{StreamExt, future::join_all};
 use nostr::{
     Event, EventId, Filter, Kind as EventKind, RelayUrl, Timestamp,
     event::TagKind,
-    filter::MatchEventOptions,
     key::PublicKey,
     nips::nip11::{Limitation, RelayInformationDocument},
     util::JsonUtil,
 };
 use nostr_sdk::{
     client::Client as NostrClient,
-    prelude::ConnectionMode,
-    relay::{Relay, RelayCapabilities, RelayOptions, RelayStatus, ReqExitPolicy},
+    relay::{RelayCapabilities, RelayStatus, ReqExitPolicy},
 };
 use reqwest::Url;
-use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    fs::File,
-    net::IpAddr,
-    ops::Sub,
-    sync::Arc,
-    time::Instant,
-};
+use std::{borrow::Cow, collections::HashSet, net::IpAddr, ops::Sub, sync::Arc, time::Instant};
 use tokio::{
-    sync::{RwLock, watch},
+    sync::{Mutex, RwLock},
     time,
 };
 
-const RELAY_DISCOVERY: EventKind = EventKind::Custom(30166);
-
-#[derive(Debug)]
-struct QueryEvent {
-    found_on_relays: HashSet<RelayUrl>,
-    relays_without_event: HashSet<RelayUrl>,
-}
+const RELAY_DISCOVERY: EventKind = EventKind::Custom(30166); // TODO: contribute?
 
 #[derive(Debug)]
 pub(crate) struct Relays {
@@ -48,6 +28,13 @@ pub(crate) struct Relays {
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
     pub seen_relay_info: RwLock<HashSet<Url>>,
+    pub nip66_discovered: Mutex<HashSet<Url>>,
+}
+
+#[derive(Debug)]
+struct QueryEvent {
+    found_on_relays: HashSet<RelayUrl>,
+    relays_without_event: HashSet<RelayUrl>,
 }
 
 impl Relays {
@@ -63,6 +50,7 @@ impl Relays {
                         log::error!("failed to update relays: {e}");
                     }
                     Self::update_connections(&this).await;
+                    Self::spawn_relays_discovery(this.clone());
                     Self::update_subscription(this).await?;
                     Ok(result?)
                 }
@@ -86,10 +74,19 @@ impl Relays {
             read_write,
             read,
             block,
+            nip66_discovered,
             client_relays,
-        } = RelayLists::new(&this.args, &this.nostr_client).await?;
+        } = RelayLists::new(&this).await?;
 
-        // TODO
+        if !nip66_discovered.is_empty() {
+            log::info!("discovered new relays {nip66_discovered:?}");
+        }
+
+        if read_write.is_empty() && read.is_empty() && !block.is_empty() {
+            let mut writer = this.policy.policy.block_relays.write().await;
+            *writer = Default::default();
+            return Err(ah::anyhow!("all relays are blocked"));
+        }
 
         {
             let mut writer = this.policy.policy.block_relays.write().await;
@@ -99,7 +96,7 @@ impl Relays {
         for i in &block {
             let url = RelayUrl::parse(i.as_str())?;
             if client_relays.contains(&url) {
-                let _ = this.nostr_client.force_remove_relay(url).await;
+                let _ = this.nostr_client.remove_relay(url).force().await;
             }
         }
 
@@ -132,7 +129,7 @@ impl Relays {
             .connect()
             .and_wait(this.args.connection_timeout.0)
             .await;
-        let elapsed = humantime::Duration::from(start.elapsed());
+        let elapsed = elapsed(start);
 
         let client_relays = this.nostr_client.relays().await;
         let connected_relays = client_relays
@@ -144,18 +141,49 @@ impl Relays {
             .filter(|(_, relay)| !relay.status().is_connected())
             .map(|(url, _)| url.to_string())
             .collect::<Vec<_>>();
-        let failing_relays = client_relays
-            .values()
-            .filter(|i| i.status() == RelayStatus::Banned)
-            .count();
+        let blocked_relays = { this.policy.policy.block_relays.read().await };
         log::info!(
-            "currently connected to {connected_relays}/{} relays, disconnected from {}, \
-             {failing_relays} are failing",
+            "currently connected to {connected_relays}/{} relays, disconnected from {}, {} are \
+             blocked",
             client_relays.len(),
             disconnected_relays.len(),
+            blocked_relays.len(),
         );
-        log::debug!("reconnection took {elapsed}, disconnected relays: {disconnected_relays:?}");
-        // TODO: blocked relays
+        log::debug!("reconnection took {elapsed}, blocked relays: {blocked_relays:?}");
+    }
+
+    fn spawn_relays_discovery(this: Arc<Self>) {
+        if this.args.no_nip66 {
+            return;
+        }
+
+        tokio::spawn(async move {
+            log::info!("discovering relays");
+            let start = Instant::now();
+            let mut stream = this
+                .nostr_client
+                .stream_events(Filter::new().kind(RELAY_DISCOVERY))
+                .timeout(this.args.update_interval.0)
+                .policy(ReqExitPolicy::WaitDurationAfterEOSE(
+                    this.args.update_interval.0,
+                ))
+                .await?;
+
+            let mut discovered = HashSet::<Url>::default();
+            while let Some((_, Ok(event))) = stream.next().await {
+                if let Some(Ok(url)) = event.tags.identifier().map(|i| normalize_url(i.parse()?)) {
+                    log::debug!("discovering relay {url}");
+                    discovered.insert(url);
+                }
+            }
+
+            {
+                this.nip66_discovered.lock().await.extend(discovered);
+            }
+
+            log::info!("discovering finished after {}", elapsed(start));
+            Ok::<_, ah::Error>(())
+        });
     }
 
     async fn update_subscription(this: Arc<Self>) -> ah::Result<()> {
@@ -190,14 +218,12 @@ impl Relays {
                 ))
                 .await?;
 
-            while let Some((_, event)) = stream.next().await {
-                let event = event?;
+            while let Some((_, Ok(event))) = stream.next().await {
                 log::debug!("received event {} from subscription", event.id);
                 let _ = Self::spawn_handle_event(this.clone(), event, None, true).await;
             }
 
-            let elapsed = humantime::Duration::from(start.elapsed());
-            log::info!("closed all subscriptions after {elapsed}");
+            log::info!("closed all subscriptions after {}", elapsed(start));
         }
 
         Ok(())
@@ -263,7 +289,6 @@ impl Relays {
                 this.policy.forget(event_id).await;
                 log::error!("failed to broadcast event {event_id}: {e}");
             } else {
-                // TODO: nostr_client.sync().await?;
                 let QueryEvent {
                     found_on_relays,
                     relays_without_event,
@@ -317,10 +342,16 @@ impl Relays {
                 }
             });
 
+            log::debug!("checking relay info of {relay_url}");
             let mut has_limitation = false;
             if let Some(relay_discovery) = this
                 .nostr_client
-                .fetch_events(Filter::new().limit(1).kind(RELAY_DISCOVERY))
+                .fetch_events(
+                    Filter::new()
+                        .limit(1)
+                        .kind(RELAY_DISCOVERY)
+                        .identifier(relay_url.as_str()),
+                )
                 .timeout(this.args.request_timeout.0)
                 .await
                 .ok()
@@ -332,6 +363,8 @@ impl Relays {
                         .await
                         .insert(relay_url.clone().into());
                 }
+
+                log::debug!("discovered relay info {relay_discovery:?}");
 
                 let tags = event
                     .tags
@@ -383,7 +416,7 @@ impl Relays {
 
             if !found_event_with_same_author {
                 log::debug!(
-                    "ignore {relay_url} due to relay is limited and has no relevant events"
+                    "blocking {relay_url} due to relay is limited and has no relevant events"
                 );
                 {
                     this.policy
@@ -441,4 +474,8 @@ impl QueryEvent {
             relays_without_event,
         })
     }
+}
+
+fn elapsed(start: Instant) -> humantime::Duration {
+    humantime::Duration::from(start.elapsed())
 }
