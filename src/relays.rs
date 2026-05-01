@@ -20,6 +20,8 @@ use tokio::{
     time,
 };
 
+const WEEK_SECS: u64 = 7 * 24 * 60 * 60;
+
 #[derive(Debug)]
 pub(crate) struct Relays {
     pub nostr_client: NostrClient,
@@ -160,15 +162,16 @@ impl Relays {
         tokio::spawn(async move {
             log::info!("discovering relays");
             let start = Instant::now();
+            let timeout = this.args.update_interval.0;
             let mut stream = this
                 .nostr_client
-                .stream_events(Filter::new().kind(EventKind::RelayDiscovery))
-                .timeout(this.args.update_interval.0)
-                .policy(ReqExitPolicy::WaitDurationAfterEOSE(
-                    this.args.update_interval.0,
-                ))
+                .stream_events(
+                    this.filter_in_update_interval(WEEK_SECS)
+                        .kind(EventKind::RelayDiscovery),
+                )
+                .timeout(timeout)
+                .policy(ReqExitPolicy::WaitDurationAfterEOSE(timeout))
                 .await?;
-            // TODO: since? a day ago?
 
             let mut discovered = HashSet::<Url>::default();
             while let Some((_, Ok(event))) = stream.next().await {
@@ -196,12 +199,7 @@ impl Relays {
         if let (Some(pubkeys), Some(kinds)) =
             (this.args.pubkeys.clone(), this.args.event_kinds.clone())
         {
-            let now = Timestamp::now().as_secs();
-            let interval = this.args.update_interval.0.as_secs();
-            let filter = Filter::new()
-                .since(Timestamp::from_secs(now.saturating_sub(interval)))
-                .until(Timestamp::from_secs(now.saturating_add(interval)))
-                .kinds(kinds.0);
+            let filter = this.filter_in_update_interval(0).kinds(kinds.0);
             let filters = [
                 filter.clone().authors(pubkeys.0.clone()),
                 filter.pubkeys(pubkeys.0),
@@ -210,13 +208,12 @@ impl Relays {
             log::debug!("subscribing {filters:?}");
             let start = Instant::now();
 
+            let timeout = this.args.update_interval.0;
             let mut stream = this
                 .nostr_client
-                .stream_events(filters.clone())
-                .timeout(this.args.update_interval.0)
-                .policy(ReqExitPolicy::WaitDurationAfterEOSE(
-                    this.args.update_interval.0,
-                ))
+                .stream_events(filters)
+                .timeout(timeout)
+                .policy(ReqExitPolicy::WaitDurationAfterEOSE(timeout))
                 .await?;
 
             while let Some((_, Ok(event))) = stream.next().await {
@@ -351,7 +348,7 @@ impl Relays {
             if let Some(relay_discovery) = this
                 .nostr_client
                 .fetch_events(
-                    Filter::new()
+                    this.filter_in_update_interval(WEEK_SECS)
                         .limit(1)
                         .kind(EventKind::RelayDiscovery)
                         .identifier(relay_url.as_str()),
@@ -442,6 +439,16 @@ impl Relays {
             Ok::<_, ah::Error>(())
         }))
         .await;
+    }
+
+    fn filter_in_update_interval(&self, age_secs: u64) -> Filter {
+        let interval = self.args.update_interval.0.as_secs();
+        let now = Timestamp::now().as_secs();
+        Filter::new()
+            .since(Timestamp::from_secs(
+                now.saturating_sub(interval).saturating_sub(age_secs),
+            ))
+            .until(Timestamp::from_secs(now.saturating_add(interval)))
     }
 }
 

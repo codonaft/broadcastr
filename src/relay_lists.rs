@@ -6,7 +6,7 @@ use futures::future::try_join_all;
 use nostr::{RelayUrl, serde_json};
 use nostr_sdk::relay::RelayStatus;
 use reqwest::{ClientBuilder, Url};
-use std::{collections::HashSet, fs::File, ops::Sub, sync::Arc};
+use std::{collections::HashSet, fs::File, ops::Sub};
 
 #[derive(Debug)]
 pub(crate) struct RelayLists {
@@ -18,7 +18,7 @@ pub(crate) struct RelayLists {
 }
 
 impl RelayLists {
-    pub(crate) async fn new(relays: &Arc<Relays>) -> ah::Result<Self> {
+    pub(crate) async fn new(relays: &Relays) -> ah::Result<Self> {
         let args = &relays.args;
 
         let discovered: HashSet<Url> = {
