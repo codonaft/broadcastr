@@ -87,7 +87,11 @@ impl Relays {
         } = RelayLists::new(this).await?;
 
         if !nip66_discovered.is_empty() {
-            log::info!("discovered new relays {nip66_discovered:?}");
+            let discovered = nip66_discovered
+                .iter()
+                .map(|i| i.as_str())
+                .collect::<Vec<_>>();
+            log::info!("discovered new relays {discovered:?}");
         }
 
         if read_write.is_empty() && read.is_empty() && !block.is_empty() {
@@ -182,10 +186,16 @@ impl Relays {
                 .await?;
 
             let mut discovered = HashSet::<Url>::default();
-            while let Some((_, Ok(event))) = stream.next().await {
-                if let Some(Ok(url)) = event.tags.identifier().map(|i| normalize_url(i.parse()?)) {
-                    log::debug!("discovering relay {url}");
-                    discovered.insert(url);
+            while let Some((_, event)) = stream.next().await {
+                if let Ok(event) = event {
+                    if let Some(Ok(url)) =
+                        event.tags.identifier().map(|i| normalize_url(i.parse()?))
+                    {
+                        log::debug!("discovering relay {url}");
+                        discovered.insert(url);
+                    }
+                } else {
+                    break;
                 }
             }
 
@@ -224,7 +234,8 @@ impl Relays {
                 .policy(ReqExitPolicy::WaitDurationAfterEOSE(timeout))
                 .await?;
 
-            while let Some((_, Ok(event))) = stream.next().await {
+            while let Some((_, event)) = stream.next().await {
+                let event = event?;
                 log::debug!("received event {} from subscription", event.id);
                 let _ = Self::spawn_handle_event(this.clone(), event, None, true).await;
             }
