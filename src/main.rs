@@ -100,11 +100,11 @@ struct Broadcastr {
 
     /// don't discover additional relays from user profiles
     #[argh(switch)]
-    no_gossip: bool,
+    no_gossip_discovery: bool,
 
-    /// don't discover additional relays (NIP-66)
+    /// don't discover additional relays using NIP-66
     #[argh(switch)]
-    no_nip66: bool,
+    no_nip66_discovery: bool,
 
     /// don't use azzamo.net for spam filtering
     #[argh(switch)]

@@ -60,7 +60,7 @@ impl Relays {
     async fn update_relays(this: &Arc<Self>) -> ah::Result<()> {
         log::info!("updating relays");
 
-        let discovery_flag = if this.args.no_gossip {
+        let discovery_flag = if this.args.no_gossip_discovery {
             RelayCapabilities::NONE
         } else {
             RelayCapabilities::DISCOVERY
@@ -153,7 +153,7 @@ impl Relays {
     }
 
     fn spawn_relays_discovery(this: Arc<Self>) {
-        if this.args.no_nip66 {
+        if this.args.no_nip66_discovery {
             return;
         }
 
@@ -168,6 +168,7 @@ impl Relays {
                     this.args.update_interval.0,
                 ))
                 .await?;
+            // TODO: since? a day ago?
 
             let mut discovered = HashSet::<Url>::default();
             while let Some((_, Ok(event))) = stream.next().await {

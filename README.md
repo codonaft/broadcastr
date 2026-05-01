@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--max-relays <max-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--no-gossip] [--no-nip66] [--no-azzamo] [--detect-failing-relays] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--max-tags <max-tags>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--max-relays <max-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--no-gossip-discovery] [--no-nip66-discovery] [--no-azzamo] [--detect-failing-relays] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--max-tags <max-tags>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -71,8 +71,10 @@ Options:
   --max-events-by-ip-per-min
                     limit events by IP (default is 50)
   --min-pow         pow difficulty limit (NIP-13)
-  --no-gossip       don't discover additional relays from user profiles
-  --no-nip66        don't discover additional relays (NIP-66)
+  --no-gossip-discovery
+                    don't discover additional relays from user profiles
+  --no-nip66-discovery
+                    don't discover additional relays using NIP-66
   --no-azzamo       don't use azzamo.net for spam filtering
   --detect-failing-relays
                     aggressively detect relays that can't receive relevant
@@ -101,12 +103,13 @@ Options:
 - [x] support azzamo ban api
 - [ ] use client IP (requires `X-Forwarded-For` or `X-Real-IP` request header in your reverse proxy)
   - [x] rate-limit
-  - [ ] allow-list (which overrides pubkeys allow-list)
+  - [ ] allow-list
+    - which overrides pubkeys allow-list?
+    - disables rate-limit for tor exit nodes?
 - [ ] use follower list as allow-list
 - [ ] use REQ filter as allow-list?
   - e.g. allow events that ping a certain npub
     - limit number of `p` tags for events by strangers to avoid spam
-- [ ] relays fetching: process errors separately per provider
 - [x] deduplicate concurrently sent events
 - [x] option to subscribe to a certain REQ filter and automatically broadcast such events
   - with auto added `authors` and `since`

@@ -78,7 +78,7 @@ impl ClientAndPolicy {
             // event signing is not supported
             .automatic_authentication(false)
             .gossip_config(GossipConfig {
-                limits: if args.no_gossip {
+                limits: if args.no_gossip_discovery {
                     GossipRelayLimits {
                         read_relays_per_user: 0,
                         write_relays_per_user: 0,
