@@ -125,7 +125,7 @@ struct Broadcastr {
 
     /// connection timeout (default is 15s)
     #[argh(option, default = "DurationArg(Duration::from_secs(15))")]
-    connection_timeout: DurationArg,
+    connect_timeout: DurationArg,
 
     /// request timeout (default is 10s)
     #[argh(option, default = "DurationArg(Duration::from_secs(10))")]
@@ -172,10 +172,8 @@ async fn main() -> ah::Result<()> {
         ah::bail!("--pubkeys and --kinds are required for --subscribe");
     }
 
-    if args.update_interval.0 < args.connection_timeout.0 + args.request_timeout.0 {
-        ah::bail!(
-            "--update-interval should be greater than --connection-timeout + --request-timeout"
-        );
+    if args.update_interval.0 < args.connect_timeout.0 + args.request_timeout.0 {
+        ah::bail!("--update-interval should be greater than --connect-timeout + --request-timeout");
     }
 
     if args.no_mentions && args.pubkeys.is_none() {
@@ -358,7 +356,7 @@ async fn new_listeners(args: &Broadcastr) -> ah::Result<Vec<TcpListener>> {
 
 fn proxied_client_builder(url: &Url, args: &Broadcastr) -> ah::Result<ClientBuilder> {
     let client = ClientBuilder::new()
-        .connect_timeout(args.connection_timeout.0)
+        .connect_timeout(args.connect_timeout.0)
         .timeout(args.request_timeout.0);
     let client = if let Some(proxy) = args.proxy {
         client.proxy(Proxy::all(format!("socks5h://{proxy}")).map_err(ah::Error::from)?)

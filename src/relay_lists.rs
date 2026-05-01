@@ -101,7 +101,7 @@ impl RelayLists {
                     })?
                 } else if ["https", "http"].contains(&uri.scheme()) {
                     ClientBuilder::new()
-                        .connect_timeout(args.connection_timeout.0)
+                        .connect_timeout(args.connect_timeout.0)
                         .timeout(args.request_timeout.0)
                         .build()?
                         .get(uri.as_ref())

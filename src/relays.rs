@@ -127,7 +127,7 @@ impl Relays {
         let start = Instant::now();
         this.nostr_client
             .connect()
-            .and_wait(this.args.connection_timeout.0)
+            .and_wait(this.args.connect_timeout.0)
             .await;
         let elapsed = elapsed(start);
 
@@ -335,9 +335,9 @@ impl Relays {
             }
 
             let connected_relay = tokio::spawn({
-                let connection_timeout = this.args.connection_timeout.0;
+                let connect_timeout = this.args.connect_timeout.0;
                 async move {
-                    relay.wait_for_connection(connection_timeout).await;
+                    relay.wait_for_connection(connect_timeout).await;
                     relay
                 }
             });
