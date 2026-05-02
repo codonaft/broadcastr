@@ -1,4 +1,4 @@
-use crate::{Broadcastr, UPDATE_INTERVAL, normalize_url};
+use crate::{Broadcastr, UPDATE_INTERVAL};
 use anyhow as ah;
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use lru::LruCache;
@@ -7,8 +7,12 @@ use nostr::{
     util::BoxedFuture,
 };
 use nostr_sdk::prelude::{AdmitPolicy, AdmitStatus, PolicyError};
-use reqwest::Url;
-use std::{collections::HashSet, net::IpAddr, num::NonZeroUsize, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashSet},
+    net::IpAddr,
+    num::NonZeroUsize,
+    sync::Arc,
+};
 use tokio::sync::{Mutex, RwLock, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
@@ -29,7 +33,7 @@ pub(crate) struct InnerPolicy {
     pub kinds: HashSet<EventKind>,
     pub min_pow: Option<u8>,
     pub no_nip66_discovery: bool,
-    pub block_relays: Arc<RwLock<HashSet<Url>>>,
+    pub block_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
     pub azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
 }
 
@@ -79,8 +83,11 @@ impl Policy {
     }
 
     pub(crate) async fn block(&self, relay_url: &RelayUrl) -> ah::Result<()> {
-        let url = normalize_url(relay_url.as_str().parse()?)?;
-        self.policy.block_relays.write().await.insert(url);
+        self.policy
+            .block_relays
+            .write()
+            .await
+            .insert(relay_url.clone());
         Ok(())
     }
 }
@@ -88,13 +95,13 @@ impl Policy {
 impl InnerPolicy {
     pub(crate) fn new(
         args: &Broadcastr,
-        block_relays: Arc<RwLock<HashSet<Url>>>,
+        block_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
         azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
     ) -> Self {
         Self {
             pubkeys: args.pubkeys.clone().unwrap_or_default().0,
             no_mentions: args.no_mentions,
-            kinds: args.event_kinds.clone().unwrap_or_default().0,
+            kinds: args.kinds.clone().unwrap_or_default().0,
             min_pow: args.min_pow,
             no_nip66_discovery: args.no_nip66_discovery,
             block_relays: block_relays.clone(),

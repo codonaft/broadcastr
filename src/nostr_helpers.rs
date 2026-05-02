@@ -79,7 +79,7 @@ pub(crate) async fn handle_ws_connection(
         .close()
         .await
         .context("ws_sender.close")
-        .map_err(|e| log::error!("{e}"));
+        .inspect_err(|e| log::error!("{e}"));
     log::debug!("closed connection with client");
     Ok(())
 }

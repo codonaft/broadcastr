@@ -47,7 +47,7 @@ struct Broadcastr {
     #[argh(option)]
     relays: Option<Urls>,
 
-    /// same, but for read-only relays; overrides entries of the write relays
+    /// same, but for read-only relays; overrides the --relays entries
     #[argh(option)]
     read_relays: Option<Urls>,
 
@@ -56,9 +56,38 @@ struct Broadcastr {
     #[argh(option)]
     block_relays: Option<Urls>,
 
-    /// limit the connection pool
+    /// allow some event kinds only
+    /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
     #[argh(option)]
-    max_relays: Option<NonZeroUsize>,
+    kinds: Option<nostr_helpers::EventKinds>,
+
+    /// allow authors or mentioned authors only (comma-separated hex/bech32/NIP-21 allow-list)
+    #[argh(option)]
+    pubkeys: Option<nostr_helpers::PublicKeys>,
+
+    /// disallow mentions (of the allowed authors) by others
+    #[argh(switch)]
+    no_mentions: bool,
+
+    /// subscribe and automatically distribute events (of the allowed authors and kinds)
+    #[argh(switch)]
+    subscribe: bool,
+
+    /// don't discover additional relays from user profiles
+    #[argh(switch)]
+    no_gossip_discovery: bool,
+
+    /// don't discover additional relays using NIP-66
+    #[argh(switch)]
+    no_nip66_discovery: bool,
+
+    /// consume less resources but block possibly failing relays more aggressively
+    #[argh(switch)]
+    no_nip11_requests: bool,
+
+    /// don't use azzamo.net for spam filtering
+    #[argh(switch)]
+    no_azzamo: bool,
 
     /// connect to tor onion relays using socks5 proxy
     /// (e.g. "127.0.0.1:9050")
@@ -69,22 +98,13 @@ struct Broadcastr {
     #[argh(option)]
     proxy: Option<SocketAddr>,
 
-    /// allow authors or mentioned authors only (comma-separated hex/bech32/NIP-21 allow-list)
+    /// log level (default is info)
+    #[argh(option, default = "LevelFilter::Info")]
+    log_level: LevelFilter,
+
+    /// limit the connection pool
     #[argh(option)]
-    pubkeys: Option<nostr_helpers::PublicKeys>,
-
-    /// disallow mentions (of the allowed authors) by others
-    #[argh(switch)]
-    no_mentions: bool,
-
-    /// allow some event kinds only
-    /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
-    #[argh(option)]
-    event_kinds: Option<nostr_helpers::EventKinds>,
-
-    /// subscribe and automatically distribute events of the allowed authors and event kinds
-    #[argh(switch)]
-    subscribe: bool,
+    max_relays: Option<NonZeroUsize>,
 
     /// limit events by author (default is 5)
     #[argh(option, default = "nonzero!(5u32)")]
@@ -94,25 +114,13 @@ struct Broadcastr {
     #[argh(option, default = "nonzero!(50u32)")]
     max_events_by_ip_per_min: NonZeroU32,
 
-    /// pow difficulty limit (NIP-13)
+    /// proof of work difficulty limit
     #[argh(option)]
     min_pow: Option<u8>,
 
-    /// don't discover additional relays from user profiles
-    #[argh(switch)]
-    no_gossip_discovery: bool,
-
-    /// don't discover additional relays using NIP-66
-    #[argh(switch)]
-    no_nip66_discovery: bool,
-
-    /// consume less CPU but block possibly failing relays more aggressively
-    #[argh(switch)]
-    no_nip11_requests: bool,
-
-    /// don't use azzamo.net for spam filtering
-    #[argh(switch)]
-    no_azzamo: bool,
+    /// max tags allowed for non-kind-3 events (default is 32)
+    #[argh(option, default = "32")]
+    max_tags: u16,
 
     /// relays and spam-lists update interval (default is 15m)
     #[argh(option, default = "DurationArg(UPDATE_INTERVAL)")]
@@ -129,14 +137,6 @@ struct Broadcastr {
     /// request timeout (default is 10s)
     #[argh(option, default = "DurationArg(Duration::from_secs(10))")]
     request_timeout: DurationArg,
-
-    /// log level (default is info)
-    #[argh(option, default = "LevelFilter::Info")]
-    log_level: LevelFilter,
-
-    /// max tags allowed for non kind 3 events (default is 32)
-    #[argh(option, default = "32")]
-    max_tags: u16,
 
     /// event message size
     #[argh(option, default = "70 * 1024")]
@@ -171,7 +171,7 @@ async fn main() -> ah::Result<()> {
         ah::bail!("either --relays or --read-relays required");
     }
 
-    if args.subscribe && (args.pubkeys.is_none() || args.event_kinds.is_none()) {
+    if args.subscribe && (args.pubkeys.is_none() || args.kinds.is_none()) {
         ah::bail!("--pubkeys and --kinds required for --subscribe");
     }
 
@@ -369,30 +369,6 @@ fn proxied_client_builder(url: &Url, args: &Broadcastr) -> ah::Result<ClientBuil
     Ok(client)
 }
 
-// TODO: use RelayUrl when possible
-fn normalize_url(mut url: Url) -> ah::Result<Url> {
-    let mut path_segments: Vec<String> = url
-        .path_segments()
-        .map(|segments| {
-            segments
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    while let Some(last_segment) = path_segments.last() {
-        if last_segment.is_empty() {
-            path_segments.pop();
-        } else {
-            break;
-        }
-    }
-
-    url.set_path(&path_segments.join("/"));
-    Ok(url)
-}
-
 fn retry_with_backoff_endless<F, Fut>(
     args: Broadcastr,
     f: F,
@@ -413,10 +389,7 @@ impl FromStr for Urls {
 
     fn from_str(urls: &str) -> Result<Self, Self::Err> {
         urls.split(',')
-            .map(|i| {
-                let url = i.parse::<Url>().map_err(|e| e.to_string())?;
-                normalize_url(url).map_err(|e| e.to_string())
-            })
+            .map(|i| i.parse::<Url>().map_err(|e| e.to_string()))
             .collect::<Result<_, _>>()
             .map(Self)
     }

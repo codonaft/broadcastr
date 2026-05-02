@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--max-relays <max-relays>] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--pubkeys <pubkeys>] [--no-mentions] [--event-kinds <event-kinds>] [--subscribe] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--no-gossip-discovery] [--no-nip66-discovery] [--no-nip11-requests] [--no-azzamo] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--log-level <log-level>] [--max-tags <max-tags>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-gossip-discovery] [--no-nip66-discovery] [--no-nip11-requests] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -50,41 +50,41 @@ Options:
   --listen          the listener ws URI (e.g. "ws://localhost:8080")
   --relays          relays or relay-list URIs (comma-separated, e.g.
                     "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
-  --read-relays     same, but for read-only relays; overrides entries of the
-                    write relays
+  --read-relays     same, but for read-only relays; overrides the --relays
+                    entries
   --block-relays    same, but for ignored relays; put public URL to your
                     broadcastr here to avoid loops
-  --max-relays      limit the connection pool
-  --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
-                    "127.0.0.1:9050")
-  --proxy           make all connections using socks5 proxy
+  --kinds           allow some event kinds only (comma-separated allow-list, e.g
+                    "0,1,3,5,6,7,4550,34550")
   --pubkeys         allow authors or mentioned authors only (comma-separated
                     hex/bech32/NIP-21 allow-list)
   --no-mentions     disallow mentions (of the allowed authors) by others
-  --event-kinds     allow some event kinds only (comma-separated allow-list, e.g
-                    "0,1,3,5,6,7,4550,34550")
-  --subscribe       subscribe and automatically distribute events of the allowed
-                    authors and event kinds
-  --max-events-by-author-per-min
-                    limit events by author (default is 5)
-  --max-events-by-ip-per-min
-                    limit events by IP (default is 50)
-  --min-pow         pow difficulty limit (NIP-13)
+  --subscribe       subscribe and automatically distribute events (of the
+                    allowed authors and kinds)
   --no-gossip-discovery
                     don't discover additional relays from user profiles
   --no-nip66-discovery
                     don't discover additional relays using NIP-66
   --no-nip11-requests
-                    consume less CPU but block possibly failing relays more
-                    aggressively
+                    consume less resources but block possibly failing relays
+                    more aggressively
   --no-azzamo       don't use azzamo.net for spam filtering
+  --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
+                    "127.0.0.1:9050")
+  --proxy           make all connections using socks5 proxy
+  --log-level       log level (default is info)
+  --max-relays      limit the connection pool
+  --max-events-by-author-per-min
+                    limit events by author (default is 5)
+  --max-events-by-ip-per-min
+                    limit events by IP (default is 50)
+  --min-pow         proof of work difficulty limit
+  --max-tags        max tags allowed for non-kind-3 events (default is 32)
   --update-interval relays and spam-lists update interval (default is 15m)
   --max-backoff-interval
                     max update backoff interval (default is 5m)
   --connect-timeout connection timeout (default is 15s)
   --request-timeout request timeout (default is 10s)
-  --log-level       log level (default is info)
-  --max-tags        max tags allowed for non kind 3 events (default is 32)
   --max-msg-size    event message size
   --tcp-backlog     max incoming connections per listener IP address
   --max-frame-size  ws frame size

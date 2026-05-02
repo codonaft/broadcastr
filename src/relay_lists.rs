@@ -1,82 +1,73 @@
+use super::Broadcastr;
 use crate::relays::{Caps, Relays};
-
-use super::{Broadcastr, normalize_url};
 use anyhow::{self as ah, Context};
 use futures::future::{join_all, try_join_all};
-use nostr::serde_json;
+use nostr::{serde_json, types::RelayUrl};
 use nostr_sdk::relay::RelayStatus;
 use reqwest::{ClientBuilder, Url};
-use std::{collections::HashSet, fs::File, ops::Sub};
+use std::{
+    collections::{BTreeSet, HashSet},
+    fs::File,
+    ops::Sub,
+};
 
 #[derive(Debug)]
 pub(crate) struct RelayLists {
-    pub read_write: HashSet<Url>,
-    pub read: HashSet<Url>,
-    pub block: HashSet<Url>,
+    pub read_write: BTreeSet<RelayUrl>,
+    pub read: BTreeSet<RelayUrl>,
+    pub block: BTreeSet<RelayUrl>,
 }
 
 impl RelayLists {
     pub(crate) async fn new(relays: &Relays, caps: Caps) -> ah::Result<Self> {
         let args = &relays.args;
 
-        let client_read_write = relays
-            .nostr_client
-            .relays()
-            .with_capabilities(caps.read_write)
-            .await
-            .values()
-            .filter(|i| i.status() != RelayStatus::Banned)
-            .map(|i| normalize_url(i.url().as_str().parse()?))
-            .collect::<ah::Result<HashSet<Url>>>()?;
-        let client_read = relays
-            .nostr_client
-            .relays()
-            .with_capabilities(caps.read)
-            .await
-            .values()
-            .filter(|i| i.status() != RelayStatus::Banned)
-            .map(|i| normalize_url(i.url().as_str().parse()?))
-            .collect::<ah::Result<HashSet<Url>>>()?;
-        let client_block = relays
-            .nostr_client
-            .relays()
-            .await
-            .values()
-            .filter(|i| i.status() == RelayStatus::Banned)
-            .map(|i| normalize_url(i.url().as_str().parse()?))
-            .collect::<ah::Result<HashSet<Url>>>()?;
+        let client_read_write = {
+            relays
+                .nostr_client
+                .relays()
+                .with_capabilities(caps.read_write)
+                .await
+                .values()
+                .filter(|i| i.status() != RelayStatus::Banned)
+                .map(|i| i.url())
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let client_read = {
+            relays
+                .nostr_client
+                .relays()
+                .with_capabilities(caps.read)
+                .await
+                .values()
+                .filter(|i| i.status() != RelayStatus::Banned)
+                .map(|i| i.url())
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let client_block = {
+            relays
+                .nostr_client
+                .relays()
+                .await
+                .values()
+                .filter(|i| i.status() == RelayStatus::Banned)
+                .map(|i| i.url())
+                .cloned()
+                .collect::<Vec<_>>()
+        };
 
-        let policy_block: HashSet<_> = { relays.policy.policy.block_relays.read().await.clone() };
+        let policy_block: BTreeSet<_> = { relays.policy.policy.block_relays.read().await.clone() };
 
         let empty = Default::default();
-        let read_write = &args
-            .relays
-            .as_ref()
-            .unwrap_or(&empty)
-            .0
-            .union(&client_read_write)
-            .cloned()
-            .collect();
-        let read = &args
-            .read_relays
-            .as_ref()
-            .unwrap_or(&empty)
-            .0
-            .union(&client_read)
-            .cloned()
-            .collect();
-        let block = &args
-            .block_relays
-            .as_ref()
-            .unwrap_or(&empty)
-            .0
-            .iter()
-            .chain(&client_block)
-            .chain(&policy_block)
-            .cloned()
-            .collect();
-
-        let futures = [read_write, read, block].into_iter().map(async |list| {
+        let futures = [
+            &args.relays.as_ref().unwrap_or(&empty).0,
+            &args.read_relays.as_ref().unwrap_or(&empty).0,
+            &args.block_relays.as_ref().unwrap_or(&empty).0,
+        ]
+        .into_iter()
+        .map(async |list| {
             Self::fetch_and_parse(list, args)
                 .await
                 .inspect_err(|e| log::error!("fetch_and_parse {list:?}: {e:?}"))
@@ -84,14 +75,42 @@ impl RelayLists {
         let mut lists = join_all(futures)
             .await
             .into_iter()
-            .collect::<Vec<ah::Result<HashSet<Url>>>>();
+            .collect::<Vec<ah::Result<BTreeSet<_>>>>();
 
-        let block = lists.pop().context("blocked")?.context("blocked")?;
-        let read = lists.pop().context("read")?.unwrap_or_default();
-        let read_write = lists.pop().context("read_write")?.unwrap_or_default();
+        let block = lists
+            .pop()
+            .context("block")?
+            .context("block")?
+            .into_iter()
+            .chain(client_block)
+            .chain(policy_block)
+            .collect::<BTreeSet<_>>();
+        let read = lists
+            .pop()
+            .context("read")?
+            .unwrap_or_default()
+            .into_iter()
+            .chain(client_read)
+            .collect::<BTreeSet<_>>();
+        let read_write = lists
+            .pop()
+            .context("read_write")?
+            .unwrap_or_default()
+            .into_iter()
+            .chain(client_read_write)
+            .collect::<BTreeSet<_>>();
 
         let read_write = read_write.sub(&block).sub(&read);
         let read = read.sub(&block);
+
+        let read_write = read_write
+            .into_iter()
+            .take(
+                args.max_relays
+                    .map(|max| max.get().saturating_sub(read.len()))
+                    .unwrap_or(usize::MAX),
+            )
+            .collect();
 
         Ok(Self {
             read_write,
@@ -103,12 +122,12 @@ impl RelayLists {
     pub(crate) async fn fetch_and_parse(
         relays_or_relays_lists: &HashSet<Url>,
         args: &Broadcastr,
-    ) -> ah::Result<HashSet<Url>> {
+    ) -> ah::Result<BTreeSet<RelayUrl>> {
         let futures = relays_or_relays_lists
             .iter()
             .map(async |uri| -> ah::Result<_> {
                 let result = if ["wss", "ws"].contains(&uri.scheme()) {
-                    vec![uri.to_string()]
+                    vec![uri.as_str().parse()?]
                 } else if uri.scheme() == "file" {
                     serde_json::from_reader(File::open(uri.path())?).map_err(|e| {
                         ah::anyhow!(r#"{}, expected format: ["ws://a","wss://b"]"#, e)
@@ -121,24 +140,27 @@ impl RelayLists {
                         .get(uri.as_ref())
                         .send()
                         .await?
-                        .json::<Vec<String>>()
+                        .json::<Vec<RelayUrl>>()
                         .await?
                 } else {
                     ah::bail!("unexpected relay item {uri}");
                 }
-                .into_iter()
-                .map(|i| normalize_url(i.parse()?));
+                .into_iter();
                 Ok(result)
             });
         let result = try_join_all(futures)
             .await?
             .into_iter()
             .flatten()
-            .collect::<ah::Result<HashSet<Url>>>()?;
+            .collect::<BTreeSet<RelayUrl>>();
         Ok(result)
     }
 
-    pub(crate) fn contains(&self, url: &Url) -> bool {
+    pub(crate) fn contains(&self, url: &RelayUrl) -> bool {
         self.read_write.contains(url) || self.read.contains(url) || self.block.contains(url)
+    }
+
+    pub(crate) fn healthy_relays(&self) -> usize {
+        self.read_write.len().saturating_add(self.read.len())
     }
 }

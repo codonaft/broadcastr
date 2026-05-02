@@ -1,7 +1,7 @@
 use super::{Broadcastr, retry_with_backoff_endless};
 use crate::{
-    Policy, normalize_url, nostr_helpers::has_publish_limitation, policy::InnerPolicy,
-    proxied_client_builder, relay_lists::RelayLists,
+    Policy, nostr_helpers::has_publish_limitation, policy::InnerPolicy, proxied_client_builder,
+    relay_lists::RelayLists,
 };
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
@@ -19,7 +19,7 @@ use nostr_sdk::{
 };
 use reqwest::Url;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     net::IpAddr,
     ops::Sub,
     sync::Arc,
@@ -46,7 +46,7 @@ pub(crate) struct Relays {
     pub nostr_client: NostrClient,
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
-    pub seen_relay_info_after_failure: RwLock<HashSet<Url>>,
+    pub seen_relay_info_after_failure: RwLock<HashSet<RelayUrl>>,
 }
 
 pub(crate) struct RelaysAndSenders {
@@ -113,25 +113,21 @@ impl Relays {
 
         for i in &block {
             // avoiding Error::RelayNotFound
-            let _ = this
-                .nostr_client
-                .remove_relay(RelayUrl::parse(i.as_str())?)
-                .force()
-                .await;
+            let _ = this.nostr_client.remove_relay(i).force().await;
         }
 
         for i in &read_write {
-            this.nostr_client
-                .add_relay(RelayUrl::parse(i.as_str())?)
+            // avoiding Error::TooManyRelays
+            let _ = this
+                .nostr_client
+                .add_relay(i)
                 .capabilities(caps.read_write)
-                .await?;
+                .await;
         }
 
         for i in &read {
-            this.nostr_client
-                .add_relay(RelayUrl::parse(i.as_str())?)
-                .capabilities(caps.read)
-                .await?;
+            // avoiding Error::TooManyRelays
+            let _ = this.nostr_client.add_relay(i).capabilities(caps.read).await;
         }
 
         log::debug!("finished updating relays");
@@ -169,7 +165,7 @@ impl Relays {
                 .collect::<Vec<_>>()
         };
         log::info!(
-            "currently connected to {connected_relays}/{} relays, {} are blocked",
+            "currently connected to {connected_relays}/{} relays, {} blocked",
             client_relays.len(),
             blocked_relays.len(),
         );
@@ -183,7 +179,7 @@ impl Relays {
     ) -> ah::Result<()> {
         let broadcast_filters = if this.args.subscribe
             && let (Some(pubkeys), Some(kinds)) =
-                (this.args.pubkeys.clone(), this.args.event_kinds.clone())
+                (this.args.pubkeys.clone(), this.args.kinds.clone())
         {
             let filter = this.filter_in_update_interval_with_age(0).kinds(kinds.0);
             vec![
@@ -194,8 +190,14 @@ impl Relays {
             vec![]
         };
 
+        let pool_has_empty_space = this
+            .args
+            .max_relays
+            .map(|max| relay_lists.healthy_relays() < max.get())
+            .unwrap_or(true);
+
         let mut filters = broadcast_filters.clone();
-        if !this.args.no_nip66_discovery {
+        if !this.args.no_nip66_discovery && pool_has_empty_space {
             filters.push(
                 this.filter_in_update_interval_with_age(if initialized { 0 } else { WEEK_SECS })
                     .kind(EventKind::RelayDiscovery),
@@ -206,7 +208,8 @@ impl Relays {
             return Ok(());
         }
 
-        log::info!("updating subscriptions {filters:?}");
+        log::info!("updating subscriptions");
+        log::debug!("{filters:?}");
         let start = Instant::now();
 
         let timeout = this.args.update_interval.0;
@@ -224,15 +227,15 @@ impl Relays {
                 Ok(event) => {
                     if event.kind == EventKind::RelayDiscovery
                         && !this.args.no_nip66_discovery
-                        && let Some(Ok(url)) =
-                            event.tags.identifier().map(|i| normalize_url(i.parse()?))
+                        && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
                         && !relay_lists.contains(&url)
                     {
                         log::debug!("discovered relay {url}");
-                        this.nostr_client
-                            .add_relay(RelayUrl::parse(url.as_str())?)
+                        let _ = this
+                            .nostr_client
+                            .add_relay(url)
                             .capabilities(read_write)
-                            .await?;
+                            .await;
                         discovered += 1;
                     }
 
@@ -362,7 +365,7 @@ impl Relays {
                 this.seen_relay_info_after_failure
                     .read()
                     .await
-                    .contains(&relay_url.clone().into())
+                    .contains(&relay_url)
             } {
                 return Ok(());
             }
@@ -375,7 +378,7 @@ impl Relays {
                 }
             });
 
-            log::info!("discovering relay info for {relay_url}");
+            log::debug!("discovering relay info for {relay_url}");
             let mut has_limitation = false;
             let mut has_requirements = false;
             let mut has_info_from_discovery = false;
@@ -396,10 +399,8 @@ impl Relays {
                     this.seen_relay_info_after_failure
                         .write()
                         .await
-                        .insert(relay_url.clone().into());
+                        .insert(relay_url.clone());
                 }
-
-                log::info!("found relay info {relay_discovery:?}");
 
                 let requirements = relay_discovery
                     .tags
@@ -416,6 +417,7 @@ impl Relays {
 
                 let info_from_discovery =
                     RelayInformationDocument::from_json(&relay_discovery.content);
+                log::debug!("discovered relay info for {relay_url}: {info_from_discovery:?}");
 
                 if !has_limitation {
                     has_limitation = has_publish_limitation(&info_from_discovery);
@@ -436,7 +438,7 @@ impl Relays {
                         return Ok(());
                     }
 
-                    log::info!("requesting relay info for {relay_url}");
+                    log::debug!("requesting relay info for {relay_url}");
                     let mut url = relay_url.as_str().parse::<Url>()?;
                     url.set_scheme(match url.scheme() {
                         "ws" => "http",
@@ -457,17 +459,22 @@ impl Relays {
                     match info {
                         Err(e) => {
                             let text = format!("{e:?}");
-                            log::info!("failed to retrieve relay info for {relay_url}: {text}");
                             if FATAL_CONNECTION_ERRORS.iter().any(|i| text.contains(i)) {
-                                this.block(&relay_url, "fatal connection failure").await?;
+                                this.block(&relay_url, &text).await?;
                                 return Ok(());
+                            } else {
+                                log::debug!(
+                                    "failed to retrieve relay info for {relay_url}: {text}"
+                                );
                             }
                         },
                         Ok(info) if info.status() == reqwest::StatusCode::OK => {
-                            log::info!("retrieved relay info {info:?}");
                             let bytes = info.bytes().await?;
                             let info_from_nip11 =
                                 serde_json::from_slice::<RelayInformationDocument>(&bytes);
+                            log::debug!(
+                                "retrieved relay info for {relay_url}: {info_from_nip11:?}"
+                            );
                             has_limitation = has_publish_limitation(&info_from_nip11);
                         },
                         Ok(info) => {
@@ -563,7 +570,7 @@ impl Relays {
                 RelayError::RelayMessage(text) => {
                     for reason in ["auth-required", "blocked", "restricted"] {
                         if text.contains(reason) {
-                            this.block(&relay_url, reason).await?;
+                            this.block(&relay_url, &text).await?;
                             break;
                         }
                     }
@@ -573,7 +580,7 @@ impl Relays {
                         .await;
                 },
                 _ => {
-                    log::info!("relay {relay_url} answered {err:?}");
+                    log::debug!("relay {relay_url} answered {err:?}");
                 },
             }
             Ok::<_, ah::Error>(())
@@ -591,7 +598,7 @@ impl Relays {
 
 impl RelaysAndSenders {
     pub(crate) fn new(args: &Broadcastr, connection: Connection) -> ah::Result<Self> {
-        let block_relays = Arc::new(RwLock::new(HashSet::default()));
+        let block_relays = Arc::new(RwLock::new(BTreeSet::default()));
         let seen_relay_info_after_failure = RwLock::new(HashSet::default());
         let (azzamo_block_pubkeys_sender, azzamo_block_pubkeys_receiver) =
             watch::channel(HashSet::default());
