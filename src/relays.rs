@@ -94,7 +94,6 @@ impl Relays {
             read_write,
             read,
             block,
-            client_relays,
         } = RelayLists::new(this).await?;
 
         let caps = this.capabilities();
@@ -112,9 +111,7 @@ impl Relays {
 
         for i in &block {
             let url = RelayUrl::parse(i.as_str())?;
-            if client_relays.contains(&url) {
-                let _ = this.nostr_client.remove_relay(url).force().await;
-            }
+            let _ = this.nostr_client.remove_relay(url).force().await;
         }
 
         for i in &read_write {
@@ -140,7 +137,6 @@ impl Relays {
             read_write,
             read,
             block,
-            client_relays,
         })
     }
 

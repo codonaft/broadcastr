@@ -3,7 +3,7 @@ use crate::relays::Relays;
 use super::{Broadcastr, normalize_url};
 use anyhow::{self as ah, Context};
 use futures::future::{join_all, try_join_all};
-use nostr::{RelayUrl, serde_json};
+use nostr::serde_json;
 use nostr_sdk::relay::RelayStatus;
 use reqwest::{ClientBuilder, Url};
 use std::{collections::HashSet, fs::File, ops::Sub};
@@ -13,7 +13,6 @@ pub(crate) struct RelayLists {
     pub read_write: HashSet<Url>,
     pub read: HashSet<Url>,
     pub block: HashSet<Url>,
-    pub client_relays: HashSet<RelayUrl>,
 }
 
 impl RelayLists {
@@ -74,7 +73,6 @@ impl RelayLists {
             read_write,
             read,
             block,
-            client_relays: client_relays.into_keys().collect(),
         })
     }
 
