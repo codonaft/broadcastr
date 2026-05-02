@@ -28,6 +28,7 @@ pub(crate) struct InnerPolicy {
     pub no_mentions: bool,
     pub kinds: HashSet<EventKind>,
     pub min_pow: Option<u8>,
+    pub no_nip66_discovery: bool,
     pub block_relays: Arc<RwLock<HashSet<Url>>>,
     pub azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
 }
@@ -95,6 +96,7 @@ impl InnerPolicy {
             no_mentions: args.no_mentions,
             kinds: args.event_kinds.clone().unwrap_or_default().0,
             min_pow: args.min_pow,
+            no_nip66_discovery: args.no_nip66_discovery,
             block_relays: block_relays.clone(),
             azzamo_block_pubkeys_receiver,
         }
@@ -105,6 +107,23 @@ impl InnerPolicy {
             && !event.check_pow(min_pow)
         {
             ah::bail!("unexpected pow < {min_pow}");
+        }
+
+        if event.created_at
+            > Timestamp::from_secs(
+                Timestamp::now()
+                    .as_secs()
+                    .saturating_add(UPDATE_INTERVAL.as_secs()),
+            )
+        {
+            ah::bail!("event from the future");
+        }
+
+        if !self.no_nip66_discovery
+            && event.kind == EventKind::RelayDiscovery
+            && !self.is_spam(event)
+        {
+            return Ok(());
         }
 
         if !self.kinds.is_empty() && !self.kinds.contains(&event.kind) {
@@ -119,16 +138,6 @@ impl InnerPolicy {
             } else if !self.mentions_allowed_pubkeys(event) {
                 ah::bail!("unexpected author or mentioned public key");
             }
-        }
-
-        if event.created_at
-            > Timestamp::from_secs(
-                Timestamp::now()
-                    .as_secs()
-                    .saturating_add(UPDATE_INTERVAL.as_secs()),
-            )
-        {
-            ah::bail!("event from the future");
         }
 
         if self.is_spam(event) {

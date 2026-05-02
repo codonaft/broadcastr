@@ -1,4 +1,4 @@
-use crate::relays::Relays;
+use crate::relays::{Caps, Relays};
 
 use super::{Broadcastr, normalize_url};
 use anyhow::{self as ah, Context};
@@ -16,20 +16,37 @@ pub(crate) struct RelayLists {
 }
 
 impl RelayLists {
-    pub(crate) async fn new(relays: &Relays) -> ah::Result<Self> {
+    pub(crate) async fn new(relays: &Relays, caps: Caps) -> ah::Result<Self> {
         let args = &relays.args;
 
-        let client_relays = relays.nostr_client.relays().await;
-        let banned = client_relays
-            .values()
-            .filter(|i| i.status() == RelayStatus::Banned)
-            .map(|i| normalize_url(i.url().as_str().parse()?))
-            .collect::<ah::Result<HashSet<Url>>>()?;
-        let discovered = client_relays
+        let client_read_write = relays
+            .nostr_client
+            .relays()
+            .with_capabilities(caps.read_write)
+            .await
             .values()
             .filter(|i| i.status() != RelayStatus::Banned)
             .map(|i| normalize_url(i.url().as_str().parse()?))
             .collect::<ah::Result<HashSet<Url>>>()?;
+        let client_read = relays
+            .nostr_client
+            .relays()
+            .with_capabilities(caps.read)
+            .await
+            .values()
+            .filter(|i| i.status() != RelayStatus::Banned)
+            .map(|i| normalize_url(i.url().as_str().parse()?))
+            .collect::<ah::Result<HashSet<Url>>>()?;
+        let client_block = relays
+            .nostr_client
+            .relays()
+            .await
+            .values()
+            .filter(|i| i.status() == RelayStatus::Banned)
+            .map(|i| normalize_url(i.url().as_str().parse()?))
+            .collect::<ah::Result<HashSet<Url>>>()?;
+
+        let policy_block: HashSet<_> = { relays.policy.policy.block_relays.read().await.clone() };
 
         let empty = Default::default();
         let read_write = &args
@@ -37,35 +54,42 @@ impl RelayLists {
             .as_ref()
             .unwrap_or(&empty)
             .0
-            .union(&discovered)
+            .union(&client_read_write)
             .cloned()
             .collect();
-        let read = &args.read_relays.as_ref().unwrap_or(&empty).0;
+        let read = &args
+            .read_relays
+            .as_ref()
+            .unwrap_or(&empty)
+            .0
+            .union(&client_read)
+            .cloned()
+            .collect();
         let block = &args
             .block_relays
             .as_ref()
             .unwrap_or(&empty)
             .0
-            .union(&banned)
+            .iter()
+            .chain(&client_block)
+            .chain(&policy_block)
             .cloned()
             .collect();
 
         let futures = [read_write, read, block].into_iter().map(async |list| {
-            Self::fetch_and_parse(list, args).await.map_err(|e| {
-                log::error!("fetch_and_parse {list:?}: {e:?}");
-                e
-            })
+            Self::fetch_and_parse(list, args)
+                .await
+                .inspect_err(|e| log::error!("fetch_and_parse {list:?}: {e:?}"))
         });
         let mut lists = join_all(futures)
             .await
             .into_iter()
             .collect::<Vec<ah::Result<HashSet<Url>>>>();
 
-        let mut block = lists.pop().context("blocked")?.unwrap_or_default();
+        let block = lists.pop().context("blocked")?.context("blocked")?;
         let read = lists.pop().context("read")?.unwrap_or_default();
         let read_write = lists.pop().context("read_write")?.unwrap_or_default();
 
-        block.extend(banned);
         let read_write = read_write.sub(&block).sub(&read);
         let read = read.sub(&block);
 

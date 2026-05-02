@@ -168,11 +168,15 @@ async fn main() -> ah::Result<()> {
     )?;
 
     if args.relays.is_none() && args.read_relays.is_none() {
-        ah::bail!("either --relays or --read-relays is required");
+        ah::bail!("either --relays or --read-relays required");
     }
 
     if args.subscribe && (args.pubkeys.is_none() || args.event_kinds.is_none()) {
-        ah::bail!("--pubkeys and --kinds are required for --subscribe");
+        ah::bail!("--pubkeys and --kinds required for --subscribe");
+    }
+
+    if args.no_gossip_discovery && args.no_nip66_discovery && args.relays.is_none() {
+        ah::bail!("--relays required when relay discovery disabled");
     }
 
     if args.update_interval.0 < args.connect_timeout.0 + args.request_timeout.0 {
@@ -180,7 +184,7 @@ async fn main() -> ah::Result<()> {
     }
 
     if args.no_mentions && args.pubkeys.is_none() {
-        ah::bail!("--pubkeys is required for --no-mentions");
+        ah::bail!("--pubkeys required for --no-mentions");
     }
 
     log::info!("starting {:#?}", args);
@@ -198,7 +202,7 @@ async fn main() -> ah::Result<()> {
     .into_iter()
     .find(|i| *i < MIN_SIZE)
     {
-        ah::bail!("{size} is too small");
+        ah::bail!("{size} too small");
     }
 
     let ws_message_size = args.max_msg_size * 4;
@@ -365,6 +369,7 @@ fn proxied_client_builder(url: &Url, args: &Broadcastr) -> ah::Result<ClientBuil
     Ok(client)
 }
 
+// TODO: use RelayUrl when possible
 fn normalize_url(mut url: Url) -> ah::Result<Url> {
     let mut path_segments: Vec<String> = url
         .path_segments()
