@@ -1,9 +1,9 @@
 use super::Broadcastr;
-use crate::relays::{Caps, Relays};
+use crate::relays::Relays;
 use anyhow::{self as ah, Context};
 use futures::future::{join_all, try_join_all};
 use nostr::{serde_json, types::RelayUrl};
-use nostr_sdk::relay::RelayStatus;
+use nostr_sdk::relay::{RelayCapabilities, RelayStatus};
 use reqwest::{ClientBuilder, Url};
 use std::{
     collections::{BTreeSet, HashSet},
@@ -16,11 +16,29 @@ pub(crate) struct RelayLists {
     pub read_write: BTreeSet<RelayUrl>,
     pub read: BTreeSet<RelayUrl>,
     pub block: BTreeSet<RelayUrl>,
+    pub caps: Caps,
+}
+
+#[derive(Debug)]
+pub(crate) struct Caps {
+    pub read: RelayCapabilities,
+    pub read_write: RelayCapabilities,
 }
 
 impl RelayLists {
-    pub(crate) async fn new(relays: &Relays, caps: Caps) -> ah::Result<Self> {
+    pub(crate) async fn new(relays: &Relays) -> ah::Result<Self> {
         let args = &relays.args;
+
+        let discovery_flag = if args.no_gossip_discovery {
+            RelayCapabilities::NONE
+        } else {
+            RelayCapabilities::DISCOVERY
+        };
+        let read = discovery_flag | RelayCapabilities::READ;
+        let caps = Caps {
+            read,
+            read_write: read | RelayCapabilities::WRITE,
+        };
 
         let client_read_write = {
             relays
@@ -58,8 +76,6 @@ impl RelayLists {
                 .collect::<Vec<_>>()
         };
 
-        let policy_block: BTreeSet<_> = { relays.policy.policy.block_relays.read().await.clone() };
-
         let empty = Default::default();
         let futures = [
             &args.relays.as_ref().unwrap_or(&empty).0,
@@ -83,7 +99,7 @@ impl RelayLists {
             .context("block")?
             .into_iter()
             .chain(client_block)
-            .chain(policy_block)
+            .chain(relays.policy.blocked_relays().await)
             .collect::<BTreeSet<_>>();
         let read = lists
             .pop()
@@ -116,6 +132,7 @@ impl RelayLists {
             read_write,
             read,
             block,
+            caps,
         })
     }
 

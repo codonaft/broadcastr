@@ -1,6 +1,6 @@
 use super::{Broadcastr, retry_with_backoff_endless};
 use crate::{
-    Policy, nostr_helpers::has_publish_limitation, policy::InnerPolicy, proxied_client_builder,
+    Policy, nostr_utils::has_publish_limitation, policy::InnerPolicy, proxied_client_builder,
     relay_lists::RelayLists,
 };
 use anyhow::{self as ah, Context};
@@ -12,10 +12,7 @@ use nostr::{
 };
 use nostr_sdk::{
     client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
-    relay::{
-        Error as RelayError, RelayCapabilities, RelayEventLimits, RelayLimits, RelayStatus,
-        ReqExitPolicy,
-    },
+    relay::{Error as RelayError, RelayEventLimits, RelayLimits, RelayStatus, ReqExitPolicy},
 };
 use reqwest::Url;
 use std::{
@@ -60,13 +57,6 @@ struct QueryEvent {
     relays_without_event: HashSet<RelayUrl>,
 }
 
-// TODO: move?
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Caps {
-    pub read: RelayCapabilities,
-    pub read_write: RelayCapabilities,
-}
-
 impl Relays {
     pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
         let mut initialized = false;
@@ -93,21 +83,19 @@ impl Relays {
     async fn update_relays(this: &Arc<Self>) -> ah::Result<RelayLists> {
         log::info!("updating relays");
 
-        let caps = this.capabilities();
         let RelayLists {
             read_write,
             read,
             block,
-        } = RelayLists::new(this, caps).await?;
-
-        if read_write.is_empty() && read.is_empty() && !block.is_empty() {
-            let mut writer = this.policy.policy.block_relays.write().await;
-            *writer = Default::default();
-            return Err(ah::anyhow!("all relays are blocked"));
-        }
+            caps,
+        } = RelayLists::new(this).await?;
 
         {
-            let mut writer = this.policy.policy.block_relays.write().await;
+            let mut writer = this.policy.block_relays().await;
+            if read_write.is_empty() && read.is_empty() && !block.is_empty() {
+                writer.clear();
+                return Err(ah::anyhow!("all relays are blocked"));
+            }
             *writer = block.clone();
         }
 
@@ -135,6 +123,7 @@ impl Relays {
             read_write,
             read,
             block,
+            caps,
         })
     }
 
@@ -153,23 +142,19 @@ impl Relays {
             .filter(|i| i.status().is_connected())
             .count();
 
-        // TODO: getter?
-        let blocked_relays = {
-            this.policy
-                .policy
-                .block_relays
-                .read()
-                .await
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<_>>()
-        };
+        let blocked_relays = this
+            .policy
+            .blocked_relays()
+            .await
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>();
         log::info!(
-            "currently connected to {connected_relays}/{} relays, {} blocked",
+            "currently connected to {connected_relays}/{} relays, blocked relays {}",
             client_relays.len(),
             blocked_relays.len(),
         );
-        log::debug!("reconnection took {elapsed}, blocked relays: {blocked_relays:?}");
+        log::debug!("reconnected in {elapsed}, blocked relays: {blocked_relays:?}");
     }
 
     async fn update_subscriptions(
@@ -220,7 +205,6 @@ impl Relays {
             .policy(ReqExitPolicy::WaitDurationAfterEOSE(timeout))
             .await?;
 
-        let Caps { read_write, .. } = this.capabilities();
         let mut discovered = 0;
         while let Some((stream_relay_url, stream_event)) = stream.next().await {
             match stream_event {
@@ -234,7 +218,7 @@ impl Relays {
                         let _ = this
                             .nostr_client
                             .add_relay(url)
-                            .capabilities(read_write)
+                            .capabilities(relay_lists.caps.read_write)
                             .await;
                         discovered += 1;
                     }
@@ -316,7 +300,7 @@ impl Relays {
             if let Err(e) = this
                 .nostr_client
                 .send_event(&event)
-                .to(&relays_without_event)
+                .to(relays_without_event)
                 .await
             {
                 this.policy.forget(event_id).await;
@@ -546,20 +530,6 @@ impl Relays {
             .until(Timestamp::from_secs(now.saturating_add(interval)))
     }
 
-    pub(crate) fn capabilities(&self) -> Caps {
-        let discovery_flag = if self.args.no_gossip_discovery {
-            RelayCapabilities::NONE
-        } else {
-            RelayCapabilities::DISCOVERY
-        };
-        let read_capabilities = discovery_flag | RelayCapabilities::READ;
-        let read_write_capabilities = read_capabilities | RelayCapabilities::WRITE;
-        Caps {
-            read: read_capabilities,
-            read_write: read_write_capabilities,
-        }
-    }
-
     async fn spawn_handle_relay_error(
         this: Arc<Self>,
         err: RelayError,
@@ -589,8 +559,8 @@ impl Relays {
     }
 
     async fn block(&self, relay_url: &RelayUrl, reason: &str) -> ah::Result<()> {
-        log::info!("blocking {relay_url} due to {reason}");
-        self.policy.block(relay_url).await?;
+        log::debug!("blocking {relay_url} due to {reason}");
+        self.policy.block_relay(relay_url).await;
         let _ = self.nostr_client.remove_relay(relay_url).force().await;
         Ok(())
     }
@@ -598,12 +568,12 @@ impl Relays {
 
 impl RelaysAndSenders {
     pub(crate) fn new(args: &Broadcastr, connection: Connection) -> ah::Result<Self> {
-        let block_relays = Arc::new(RwLock::new(BTreeSet::default()));
+        let blocked_relays = Arc::new(RwLock::new(BTreeSet::default()));
         let seen_relay_info_after_failure = RwLock::new(HashSet::default());
         let (azzamo_block_pubkeys_sender, azzamo_block_pubkeys_receiver) =
             watch::channel(HashSet::default());
 
-        let policy = InnerPolicy::new(args, block_relays.clone(), azzamo_block_pubkeys_receiver);
+        let policy = InnerPolicy::new(args, blocked_relays.clone(), azzamo_block_pubkeys_receiver);
 
         let relay_limits = RelayLimits {
             events: RelayEventLimits {
@@ -638,12 +608,11 @@ impl RelaysAndSenders {
             .ban_relay_on_mismatch(true)
             .admit_policy(policy.clone())
             .build();
-        let policy = Arc::new(Policy::new(policy, args));
 
         let relays = Arc::new(Relays {
-            nostr_client: nostr_client.clone(),
+            nostr_client,
             args: args.clone(),
-            policy: policy.clone(),
+            policy: Arc::new(Policy::new(policy, args)),
             seen_relay_info_after_failure,
         });
 
@@ -660,35 +629,44 @@ impl QueryEvent {
         args: &Broadcastr,
         nostr_client: &NostrClient,
     ) -> ah::Result<Self> {
-        let relays = nostr_client.relays().await;
-        let relay_urls: HashSet<RelayUrl> = relays.keys().cloned().collect();
-        let found_on_relays: HashSet<RelayUrl> =
-            join_all(relays.into_iter().map(|(relay_url, relay)| async move {
-                if relay.status() == RelayStatus::Banned {
-                    return None;
-                }
+        let found_on_relays =
+            {
+                join_all(nostr_client.relays().await.into_iter().map(
+                    |(relay_url, relay)| async move {
+                        if relay.status() == RelayStatus::Banned {
+                            return None;
+                        }
 
-                let filter = Filter::new().id(event_id).limit(1);
-                match relay
-                    .fetch_events(filter)
-                    .timeout(args.request_timeout.0)
-                    .await
-                {
-                    Ok(events) if !events.is_empty() && events.iter().any(|i| i.id == event_id) => {
-                        Some(relay_url)
+                        let filter = Filter::new().id(event_id).limit(1);
+                        match relay
+                            .fetch_events(filter)
+                            .timeout(args.request_timeout.0)
+                            .await
+                        {
+                            Ok(events)
+                                if !events.is_empty()
+                                    && events.iter().any(|i| i.id == event_id) =>
+                            {
+                                Some(relay_url)
+                            },
+                            Ok(_) => None,
+                            Err(e) => {
+                                log::debug!("cannot query relay {relay_url}: {e}");
+                                None
+                            },
+                        }
                     },
-                    Ok(_) => None,
-                    Err(e) => {
-                        log::debug!("cannot query relay {relay_url}: {e}");
-                        None
-                    },
-                }
-            }))
-            .await
-            .into_iter()
-            .flatten()
-            .collect();
+                ))
+                .await
+                .into_iter()
+                .flatten()
+                .collect::<HashSet<RelayUrl>>()
+            };
+
+        // some relays were possibly banned and removed, retrieving them again
+        let relay_urls: HashSet<RelayUrl> = nostr_client.relays().await.into_keys().collect();
         let relays_without_event = relay_urls.sub(&found_on_relays);
+
         Ok(Self {
             found_on_relays,
             relays_without_event,

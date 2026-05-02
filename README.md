@@ -116,7 +116,7 @@ Options:
   - [ ] custom relay info
   - [ ] make it work behind reverse proxy
 - [ ] custom http page or a redirect
-- [ ] improve RAM usage
+- [x] improve RAM usage
   - run memory profiler
   - disconnect from relays?
     - that previousely didn't receive events with the same kind?

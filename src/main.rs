@@ -1,4 +1,4 @@
-mod nostr_helpers;
+mod nostr_utils;
 mod policy;
 mod relay_lists;
 mod relays;
@@ -33,6 +33,7 @@ use tungstenite::protocol::WebSocketConfig;
 pub(crate) const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 const MIN_SIZE: usize = 128;
+const SHUTDOWN: &str = "shutdown";
 
 #[derive(FromArgs, Clone, Debug)]
 #[argh(help_triggers("-h", "--help"))]
@@ -59,11 +60,11 @@ struct Broadcastr {
     /// allow some event kinds only
     /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
     #[argh(option)]
-    kinds: Option<nostr_helpers::EventKinds>,
+    kinds: Option<nostr_utils::EventKinds>,
 
     /// allow authors or mentioned authors only (comma-separated hex/bech32/NIP-21 allow-list)
     #[argh(option)]
-    pubkeys: Option<nostr_helpers::PublicKeys>,
+    pubkeys: Option<nostr_utils::PublicKeys>,
 
     /// disallow mentions (of the allowed authors) by others
     #[argh(switch)]
@@ -232,7 +233,7 @@ async fn main() -> ah::Result<()> {
     Toplevel::new({
         let nostr_client = relays.nostr_client.clone();
         async move |s: &mut SubsystemHandle| {
-            s.start(SubsystemBuilder::new("shutdown", {
+            s.start(SubsystemBuilder::new(SHUTDOWN, {
                 let nostr_client = nostr_client.clone();
                 async move |subsys: &mut SubsystemHandle| {
                     subsys.on_shutdown_requested().await;
@@ -254,7 +255,7 @@ async fn main() -> ah::Result<()> {
                         [
                             async {
                                 subsys.on_shutdown_requested().await;
-                                ah::bail!("shutdown");
+                                ah::bail!(SHUTDOWN);
                             }
                             .boxed(),
                             Relays::updater(relays).boxed(),
@@ -265,7 +266,11 @@ async fn main() -> ah::Result<()> {
                     )
                     .await
                     {
-                        log::error!("{e}");
+                        if format!("{e}") == SHUTDOWN {
+                            log::info!("{e}");
+                        } else {
+                            log::error!("{e}");
+                        }
                     }
                     Ok::<_, ah::Error>(())
                 },
@@ -303,7 +308,7 @@ async fn serve(
         match listener.accept().await {
             Ok((stream, _client_addr)) => {
                 tokio::spawn(
-                    nostr_helpers::handle_ws_connection(
+                    nostr_utils::handle_ws_connection(
                         stream,
                         ws_config,
                         relays.clone(),

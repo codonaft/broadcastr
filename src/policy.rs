@@ -13,36 +13,36 @@ use std::{
     num::NonZeroUsize,
     sync::Arc,
 };
-use tokio::sync::{Mutex, RwLock, watch};
+use tokio::sync::{Mutex, RwLock, RwLockWriteGuard, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 
 // TODO: rename
 #[derive(Debug)]
 pub(crate) struct Policy {
-    pub policy: InnerPolicy, // TODO: rename?
-    pub seen_event_ids: Mutex<LruCache<EventId, ()>>,
-    pub events_by_author: RateLimitBy<PublicKey>,
-    pub events_by_ip: RateLimitBy<IpAddr>,
+    inner: InnerPolicy,
+    seen_event_ids: Mutex<LruCache<EventId, ()>>,
+    events_by_author: RateLimitBy<PublicKey>,
+    events_by_ip: RateLimitBy<IpAddr>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct InnerPolicy {
-    pub pubkeys: HashSet<PublicKey>,
-    pub no_mentions: bool,
-    pub kinds: HashSet<EventKind>,
-    pub min_pow: Option<u8>,
-    pub no_nip66_discovery: bool,
-    pub block_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
-    pub azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
+    pubkeys: HashSet<PublicKey>,
+    no_mentions: bool,
+    kinds: HashSet<EventKind>,
+    min_pow: Option<u8>,
+    no_nip66_discovery: bool,
+    blocked_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
+    azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
 }
 
 type RateLimitBy<I> = RateLimiter<I, DefaultKeyedStateStore<I>, DefaultClock>;
 
 impl Policy {
-    pub(crate) fn new(policy: InnerPolicy, args: &Broadcastr) -> Self {
+    pub(crate) fn new(inner: InnerPolicy, args: &Broadcastr) -> Self {
         Self {
-            policy,
+            inner,
             seen_event_ids: Mutex::new(LruCache::new(MAX_SEEN_EVENTS)),
             events_by_author: RateLimiter::keyed(Quota::per_minute(
                 args.max_events_by_author_per_min,
@@ -62,7 +62,7 @@ impl Policy {
             seen.put(event_id, ());
         }
 
-        self.policy.check_event(event)?;
+        self.inner.check_event(event)?;
 
         if self.events_by_author.check_key(&event.pubkey).is_err() {
             ah::bail!("rate-limit: too many attempts to transmit event by the same author");
@@ -82,20 +82,23 @@ impl Policy {
         self.seen_event_ids.lock().await.pop(&id);
     }
 
-    pub(crate) async fn block(&self, relay_url: &RelayUrl) -> ah::Result<()> {
-        self.policy
-            .block_relays
-            .write()
-            .await
-            .insert(relay_url.clone());
-        Ok(())
+    pub(crate) async fn block_relay(&self, relay_url: &RelayUrl) {
+        self.block_relays().await.insert(relay_url.clone());
+    }
+
+    pub(crate) async fn block_relays(&self) -> RwLockWriteGuard<'_, BTreeSet<RelayUrl>> {
+        self.inner.blocked_relays.write().await
+    }
+
+    pub(crate) async fn blocked_relays(&self) -> BTreeSet<RelayUrl> {
+        self.inner.blocked_relays.read().await.clone()
     }
 }
 
 impl InnerPolicy {
     pub(crate) fn new(
         args: &Broadcastr,
-        block_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
+        blocked_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
         azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
     ) -> Self {
         Self {
@@ -104,7 +107,7 @@ impl InnerPolicy {
             kinds: args.kinds.clone().unwrap_or_default().0,
             min_pow: args.min_pow,
             no_nip66_discovery: args.no_nip66_discovery,
-            block_relays: block_relays.clone(),
+            blocked_relays: blocked_relays.clone(),
             azzamo_block_pubkeys_receiver,
         }
     }
@@ -154,16 +157,8 @@ impl InnerPolicy {
     }
 
     async fn check_relay(&self, url: &RelayUrl) -> Result<AdmitStatus, PolicyError> {
-        let block_relays = {
-            self.block_relays
-                .read()
-                .await
-                .iter()
-                .map(|i| i.as_str().parse().map_err(PolicyError::backend))
-                .collect::<Result<HashSet<RelayUrl>, PolicyError>>()?
-        };
-
-        let result = if block_relays.contains(url) {
+        let blocked_relays = self.blocked_relays.read().await;
+        let result = if blocked_relays.contains(url) {
             AdmitStatus::Rejected {
                 reason: Some("relay from block-list".to_string()),
             }
