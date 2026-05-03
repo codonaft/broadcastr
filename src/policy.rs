@@ -1,4 +1,4 @@
-use crate::{Broadcastr, UPDATE_INTERVAL};
+use crate::{Broadcastr, UPDATE_INTERVAL, relay_lists::RelayLists};
 use anyhow as ah;
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use lru::LruCache;
@@ -13,7 +13,7 @@ use std::{
     num::NonZeroUsize,
     sync::Arc,
 };
-use tokio::sync::{Mutex, RwLock, RwLockWriteGuard, watch};
+use tokio::sync::{Mutex, RwLock, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 
@@ -33,7 +33,7 @@ pub(crate) struct InnerPolicy {
     kinds: HashSet<EventKind>,
     min_pow: Option<u8>,
     no_nip66_discovery: bool,
-    blocked_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
+    relay_lists: Arc<RwLock<RelayLists>>,
     azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
 }
 
@@ -83,22 +83,37 @@ impl Policy {
     }
 
     pub(crate) async fn block_relay(&self, relay_url: &RelayUrl) {
-        self.block_relays().await.insert(relay_url.clone());
-    }
-
-    pub(crate) async fn block_relays(&self) -> RwLockWriteGuard<'_, BTreeSet<RelayUrl>> {
-        self.inner.blocked_relays.write().await
+        self.inner
+            .relay_lists
+            .write()
+            .await
+            .block
+            .insert(relay_url.clone());
     }
 
     pub(crate) async fn blocked_relays(&self) -> BTreeSet<RelayUrl> {
-        self.inner.blocked_relays.read().await.clone()
+        self.inner.relay_lists.read().await.block.clone()
+    }
+
+    pub(crate) fn relay_lists(&self) -> Arc<RwLock<RelayLists>> {
+        self.inner.relay_lists.clone()
+    }
+
+    pub(crate) async fn is_gossip(&self, relay_url: &RelayUrl) -> bool {
+        let gossip = &self.inner.relay_lists.read().await.gossip;
+        gossip
+            .read
+            .iter()
+            .chain(&gossip.write)
+            .find(|i| *i == relay_url)
+            .is_some()
     }
 }
 
 impl InnerPolicy {
     pub(crate) fn new(
         args: &Broadcastr,
-        blocked_relays: Arc<RwLock<BTreeSet<RelayUrl>>>,
+        relay_lists: Arc<RwLock<RelayLists>>,
         azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
     ) -> Self {
         Self {
@@ -107,7 +122,7 @@ impl InnerPolicy {
             kinds: args.kinds.clone().unwrap_or_default().0,
             min_pow: args.min_pow,
             no_nip66_discovery: args.no_nip66_discovery,
-            blocked_relays: blocked_relays.clone(),
+            relay_lists: relay_lists.clone(),
             azzamo_block_pubkeys_receiver,
         }
     }
@@ -157,7 +172,7 @@ impl InnerPolicy {
     }
 
     async fn check_relay(&self, url: &RelayUrl) -> Result<AdmitStatus, PolicyError> {
-        let blocked_relays = self.blocked_relays.read().await;
+        let blocked_relays = &self.relay_lists.read().await.block;
         let result = if blocked_relays.contains(url) {
             AdmitStatus::Rejected {
                 reason: Some("relay from block-list".to_string()),
@@ -169,11 +184,12 @@ impl InnerPolicy {
     }
 
     fn mentions_allowed_pubkeys(&self, event: &Event) -> bool {
-        event
-            .tags
-            .public_keys()
-            .find(|i| self.pubkeys.contains(i))
-            .is_some()
+        event.kind != EventKind::ContactList
+            && event
+                .tags
+                .public_keys()
+                .find(|i| self.pubkeys.contains(i))
+                .is_some()
     }
 
     fn is_spam(&self, event: &Event) -> bool {

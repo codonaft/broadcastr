@@ -2,7 +2,7 @@ use super::Broadcastr;
 use crate::relays::Relays;
 use anyhow::{self as ah, Context};
 use futures::future::{join_all, try_join_all};
-use nostr::{serde_json, types::RelayUrl};
+use nostr::{Kind as EventKind, filter::Filter, nips::nip65, serde_json, types::RelayUrl};
 use nostr_sdk::relay::{RelayCapabilities, RelayStatus};
 use reqwest::{ClientBuilder, Url};
 use std::{
@@ -11,40 +11,29 @@ use std::{
     ops::Sub,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct RelayLists {
     pub read_write: BTreeSet<RelayUrl>,
     pub read: BTreeSet<RelayUrl>,
     pub block: BTreeSet<RelayUrl>,
-    pub caps: Caps,
+    pub gossip: GossipRelayLists,
 }
 
-#[derive(Debug)]
-pub(crate) struct Caps {
-    pub read: RelayCapabilities,
-    pub read_write: RelayCapabilities,
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GossipRelayLists {
+    pub read: BTreeSet<RelayUrl>,
+    pub write: BTreeSet<RelayUrl>,
 }
 
 impl RelayLists {
     pub(crate) async fn new(relays: &Relays) -> ah::Result<Self> {
         let args = &relays.args;
 
-        let discovery_flag = if args.no_gossip_discovery {
-            RelayCapabilities::NONE
-        } else {
-            RelayCapabilities::DISCOVERY
-        };
-        let read = discovery_flag | RelayCapabilities::READ;
-        let caps = Caps {
-            read,
-            read_write: read | RelayCapabilities::WRITE,
-        };
-
         let client_read_write = {
             relays
                 .nostr_client
                 .relays()
-                .with_capabilities(caps.read_write)
+                .with_capabilities(RelayCapabilities::READ | RelayCapabilities::WRITE)
                 .await
                 .values()
                 .filter(|i| i.status() != RelayStatus::Banned)
@@ -56,7 +45,7 @@ impl RelayLists {
             relays
                 .nostr_client
                 .relays()
-                .with_capabilities(caps.read)
+                .with_capabilities(RelayCapabilities::READ)
                 .await
                 .values()
                 .filter(|i| i.status() != RelayStatus::Banned)
@@ -119,20 +108,11 @@ impl RelayLists {
         let read_write = read_write.sub(&block).sub(&read);
         let read = read.sub(&block);
 
-        let read_write = read_write
-            .into_iter()
-            .take(
-                args.max_relays
-                    .map(|max| max.get().saturating_sub(read.len()))
-                    .unwrap_or(usize::MAX),
-            )
-            .collect();
-
         Ok(Self {
             read_write,
             read,
             block,
-            caps,
+            gossip: Default::default(),
         })
     }
 
@@ -174,10 +154,48 @@ impl RelayLists {
     }
 
     pub(crate) fn contains(&self, url: &RelayUrl) -> bool {
-        self.read_write.contains(url) || self.read.contains(url) || self.block.contains(url)
+        self.read_write.contains(url)
+            || self.read.contains(url)
+            || self.block.contains(url)
+            || self.gossip.read.contains(url)
+            || self.gossip.write.contains(url)
     }
+}
 
-    pub(crate) fn healthy_relays(&self) -> usize {
-        self.read_write.len().saturating_add(self.read.len())
+impl GossipRelayLists {
+    pub(crate) async fn fetch(
+        relays: &Relays,
+        block: &BTreeSet<RelayUrl>,
+    ) -> ah::Result<GossipRelayLists> {
+        let mut lists = GossipRelayLists::default();
+        if !relays.args.no_gossip_discovery
+            && let Some(pubkeys) = &relays.args.pubkeys
+        {
+            let filter = Filter::new()
+                .kind(EventKind::RelayList)
+                .authors(pubkeys.0.iter().copied());
+            for event in relays
+                .nostr_client
+                .fetch_events(filter)
+                .timeout(relays.args.request_timeout.0)
+                .await
+                .context("fetch gossip")?
+            {
+                for (relay_url, metadata) in nip65::extract_owned_relay_list(event) {
+                    if block.contains(&relay_url) {
+                        continue;
+                    }
+                    if let Some(nip65::RelayMetadata::Read) = metadata {
+                        lists.read.insert(relay_url);
+                    } else if let Some(nip65::RelayMetadata::Write) = metadata {
+                        lists.write.insert(relay_url);
+                    } else {
+                        lists.read.insert(relay_url.clone());
+                        lists.write.insert(relay_url);
+                    }
+                }
+            }
+        }
+        Ok(lists)
     }
 }
