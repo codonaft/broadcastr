@@ -14,7 +14,7 @@ use nostr_sdk::{
     client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
     relay::{Error as RelayError, RelayEventLimits, RelayLimits, RelayStatus, ReqExitPolicy},
 };
-use reqwest::Url;
+use reqwest::{Client as HttpClient, Url};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     net::IpAddr,
@@ -41,6 +41,7 @@ const FATAL_CONNECTION_ERRORS: [&str; 7] = [
 #[derive(Debug)]
 pub(crate) struct Relays {
     pub nostr_client: NostrClient,
+    pub http_client: HttpClient,
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
     pub seen_relay_info_after_failure: RwLock<HashSet<RelayUrl>>,
@@ -431,11 +432,8 @@ impl Relays {
                     })
                     .map_err(|e| ah::anyhow!("{e:?}"))?;
 
-                    let client = proxied_client_builder(&url, &this.args)?
-                        .tcp_keepalive(None)
-                        .build()?;
-
-                    let info = client
+                    let info = this
+                        .http_client
                         .get(url)
                         .header(reqwest::header::ACCEPT, "application/nostr+json")
                         .send()
@@ -609,8 +607,11 @@ impl RelaysAndSenders {
             .admit_policy(policy.clone())
             .build();
 
+        let http_client = proxied_client_builder(args)?.tcp_keepalive(None).build()?;
+
         let relays = Arc::new(Relays {
             nostr_client,
+            http_client,
             args: args.clone(),
             policy: Arc::new(Policy::new(policy, args)),
             seen_relay_info_after_failure,

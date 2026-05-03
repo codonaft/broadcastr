@@ -357,17 +357,26 @@ async fn new_listeners(args: &Broadcastr) -> ah::Result<Vec<TcpListener>> {
     Ok(result)
 }
 
-fn proxied_client_builder(url: &Url, args: &Broadcastr) -> ah::Result<ClientBuilder> {
+fn proxied_client_builder(args: &Broadcastr) -> ah::Result<ClientBuilder> {
+    fn socks5(proxy: SocketAddr) -> String {
+        format!("socks5h://{proxy}")
+    }
+
     let client = ClientBuilder::new()
         .connect_timeout(args.connect_timeout.0)
         .timeout(args.request_timeout.0);
     let client = if let Some(proxy) = args.proxy {
-        client.proxy(Proxy::all(format!("socks5h://{proxy}")).map_err(ah::Error::from)?)
-    } else if let Some(tor_proxy) = args.tor_proxy
-        && let Some(Host::Domain(relay_host)) = url.host()
-        && relay_host.ends_with(".onion")
-    {
-        client.proxy(Proxy::all(format!("socks5h://{tor_proxy}")).map_err(ah::Error::from)?)
+        client.proxy(Proxy::all(socks5(proxy)).map_err(ah::Error::from)?)
+    } else if let Some(tor_proxy) = args.tor_proxy {
+        client.proxy(Proxy::custom(move |url| {
+            if let Some(Host::Domain(host)) = url.host()
+                && host.ends_with(".onion")
+            {
+                Some(socks5(tor_proxy))
+            } else {
+                None
+            }
+        }))
     } else {
         client
     };
