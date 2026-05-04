@@ -26,7 +26,7 @@ use std::{
     net::IpAddr,
     ops::Sub,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::{
     sync::{RwLock, watch},
@@ -34,7 +34,6 @@ use tokio::{
 };
 
 const MAX_GOSSIP_RELAYS: usize = 3;
-const WEEK_SECS: u64 = 7 * 24 * 60 * 60;
 const FATAL_CONNECTION_ERRORS: [&str; 7] = [
     "dns error",
     "InvalidCertificate",
@@ -44,6 +43,8 @@ const FATAL_CONNECTION_ERRORS: [&str; 7] = [
     "tls handshake eof",
     "0.0.0.0:443",
 ];
+const WARMUP: Duration = Duration::from_secs(15);
+const WEEK_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[derive(Debug)]
 pub(crate) struct Relays {
@@ -67,27 +68,29 @@ struct QueryEvent {
 
 impl Relays {
     pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
-        let mut initialized = false;
+        let _ = Self::step(this.clone(), false).await;
+
         let mut interval = time::interval(this.args.update_interval.0);
         loop {
             interval.tick().await;
             retry_with_backoff_endless(this.args.clone(), || {
                 let this = this.clone();
-                async move {
-                    if let Err(e) = Self::update_relays(&this).await {
-                        log::error!("failed to update relays: {e}");
-                    }
-                    Self::update_connections(&this).await;
-                    Self::update_subscriptions(this, initialized).await?;
-                    Ok(())
-                }
+                async move { Ok(Self::step(this, true).await?) }
             })
             .await?;
-            initialized = true;
         }
     }
 
-    async fn update_relays(this: &Arc<Self>) -> ah::Result<()> {
+    async fn step(this: Arc<Self>, initialized: bool) -> ah::Result<()> {
+        if let Err(e) = Self::update_relays(&this, initialized).await {
+            log::error!("failed to update relays: {e}");
+        }
+        Self::update_connections(&this).await;
+        Self::update_subscriptions(this, initialized).await?;
+        Ok(())
+    }
+
+    async fn update_relays(this: &Arc<Self>, initialized: bool) -> ah::Result<()> {
         log::info!("updating relays");
 
         let RelayLists {
@@ -113,20 +116,22 @@ impl Relays {
             let _ = this.nostr_client.remove_relay(i).force().await;
         }
 
-        let gossip = GossipRelayLists::fetch(this, &block).await?;
-        for i in gossip.write.iter().take(MAX_GOSSIP_RELAYS) {
-            let _ = this
-                .nostr_client
-                .add_relay(i)
-                .capabilities(RelayCapabilities::WRITE)
-                .await;
-        }
-        for i in gossip.read.iter().take(MAX_GOSSIP_RELAYS) {
-            let _ = this
-                .nostr_client
-                .add_relay(i)
-                .capabilities(RelayCapabilities::READ)
-                .await;
+        if initialized {
+            let gossip = GossipRelayLists::fetch(this, &block).await?;
+            for i in gossip.write.iter().take(MAX_GOSSIP_RELAYS) {
+                let _ = this
+                    .nostr_client
+                    .add_relay(i)
+                    .capabilities(RelayCapabilities::READ | RelayCapabilities::WRITE)
+                    .await;
+            }
+            for i in gossip.read.iter().take(MAX_GOSSIP_RELAYS) {
+                let _ = this
+                    .nostr_client
+                    .add_relay(i)
+                    .capabilities(RelayCapabilities::READ)
+                    .await;
+            }
         }
 
         for i in &read {
@@ -192,7 +197,11 @@ impl Relays {
 
     async fn update_subscriptions(this: Arc<Self>, initialized: bool) -> ah::Result<()> {
         let mut futures = vec![];
-        let timeout = this.args.update_interval.0;
+        let timeout = if initialized {
+            this.args.update_interval.0
+        } else {
+            *humantime::Duration::from(WARMUP)
+        };
         let policy = ReqExitPolicy::WaitDurationAfterEOSE(timeout);
 
         if this.args.subscribe
@@ -257,7 +266,7 @@ impl Relays {
                     .await
                     .context("relay_discovery")?;
 
-                let mut discovered = 0;
+                let mut discovered = HashSet::<RelayUrl>::default();
                 let relay_lists: RelayLists = { this.policy.relay_lists().read().await.clone() };
                 while let Some((stream_relay_url, stream_event)) = stream.next().await {
                     match stream_event {
@@ -270,12 +279,12 @@ impl Relays {
                                 log::debug!("discovered relay {url}");
                                 let _ = this
                                     .nostr_client
-                                    .add_relay(url)
+                                    .add_relay(&url)
                                     .capabilities(
                                         RelayCapabilities::READ | RelayCapabilities::WRITE,
                                     )
                                     .await;
-                                discovered += 1;
+                                discovered.insert(url);
                             }
                         },
                         Err(e) => {
@@ -284,6 +293,7 @@ impl Relays {
                     }
                 }
 
+                let discovered = discovered.len();
                 log::info!("discovered {discovered} new relays");
                 Ok::<_, ah::Error>(())
             }));
