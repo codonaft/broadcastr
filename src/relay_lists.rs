@@ -171,6 +171,7 @@ impl GossipRelayLists {
         if !relays.args.no_gossip_discovery
             && let Some(pubkeys) = &relays.args.pubkeys
         {
+            // TODO: if no pubkeys - extract them from events we've broadcasted
             let filter = Filter::new()
                 .kind(EventKind::RelayList)
                 .authors(pubkeys.0.iter().copied());

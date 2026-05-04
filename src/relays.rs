@@ -270,28 +270,20 @@ impl Relays {
 
                 let mut discovered = HashSet::<RelayUrl>::default();
                 let relay_lists: RelayLists = { this.policy.relay_lists().read().await.clone() };
-                while let Some((stream_relay_url, stream_event)) = stream.next().await {
-                    match stream_event {
-                        Ok(event) => {
-                            if event.kind == EventKind::RelayDiscovery
-                                && !this.args.no_nip66_discovery
-                                && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
-                                && !relay_lists.contains(&url)
-                            {
-                                log::debug!("discovered relay {url}");
-                                let _ = this
-                                    .nostr_client
-                                    .add_relay(&url)
-                                    .capabilities(
-                                        RelayCapabilities::READ | RelayCapabilities::WRITE,
-                                    )
-                                    .await;
-                                discovered.insert(url);
-                            }
-                        },
-                        Err(e) => {
-                            Self::spawn_handle_relay_error(this.clone(), e, stream_relay_url).await;
-                        },
+                while let Some((_, stream_event)) = stream.next().await {
+                    if let Ok(event) = stream_event
+                        && event.kind == EventKind::RelayDiscovery
+                        && !this.args.no_nip66_discovery
+                        && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
+                        && !relay_lists.contains(&url)
+                    {
+                        log::debug!("discovered relay {url}");
+                        let _ = this
+                            .nostr_client
+                            .add_relay(&url)
+                            .capabilities(RelayCapabilities::READ | RelayCapabilities::WRITE)
+                            .await;
+                        discovered.insert(url);
                     }
                 }
 
