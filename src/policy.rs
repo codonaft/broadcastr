@@ -1,18 +1,14 @@
 use crate::{Broadcastr, UPDATE_INTERVAL, relay_lists::RelayLists};
 use anyhow as ah;
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
+use indexmap::IndexSet;
 use lru::LruCache;
 use nostr::{
     Event, EventId, Kind as EventKind, PublicKey, RelayUrl, SubscriptionId, Timestamp,
     util::BoxedFuture,
 };
 use nostr_sdk::prelude::{AdmitPolicy, AdmitStatus, PolicyError};
-use std::{
-    collections::{BTreeSet, HashSet},
-    net::IpAddr,
-    num::NonZeroUsize,
-    sync::Arc,
-};
+use std::{collections::HashSet, net::IpAddr, num::NonZeroUsize, sync::Arc};
 use tokio::sync::{Mutex, RwLock, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
@@ -27,10 +23,11 @@ pub(crate) struct Policy {
 
 #[derive(Debug, Clone)]
 pub(crate) struct InnerPolicy {
-    pubkeys: HashSet<PublicKey>,
+    pubkeys: IndexSet<PublicKey>,
     no_mentions: bool,
-    kinds: HashSet<EventKind>,
+    kinds: IndexSet<EventKind>,
     min_pow: Option<u8>,
+    no_gossip_discovery: bool,
     no_nip66_discovery: bool,
     relay_lists: Arc<RwLock<RelayLists>>,
     azzamo_block_pubkeys_receiver: watch::Receiver<HashSet<PublicKey>>,
@@ -82,6 +79,7 @@ impl Policy {
     }
 
     pub(crate) async fn block_relay(&self, relay_url: &RelayUrl) {
+        // TODO: ttl cache?
         self.inner
             .relay_lists
             .write()
@@ -90,7 +88,7 @@ impl Policy {
             .insert(relay_url.clone());
     }
 
-    pub(crate) async fn blocked_relays(&self) -> BTreeSet<RelayUrl> {
+    pub(crate) async fn blocked_relays(&self) -> IndexSet<RelayUrl> {
         self.inner.relay_lists.read().await.block.clone()
     }
 
@@ -99,13 +97,13 @@ impl Policy {
     }
 
     pub(crate) async fn is_gossip(&self, relay_url: &RelayUrl) -> bool {
-        let gossip = &self.inner.relay_lists.read().await.gossip;
-        gossip
-            .read
-            .iter()
-            .chain(&gossip.write)
-            .find(|i| *i == relay_url)
-            .is_some()
+        self.inner
+            .relay_lists
+            .read()
+            .await
+            .author_to_relays
+            .values()
+            .any(|i| i.contains(relay_url))
     }
 }
 
@@ -120,8 +118,9 @@ impl InnerPolicy {
             no_mentions: args.no_mentions,
             kinds: args.kinds.clone().unwrap_or_default().0,
             min_pow: args.min_pow,
+            no_gossip_discovery: args.no_gossip_discovery,
             no_nip66_discovery: args.no_nip66_discovery,
-            relay_lists: relay_lists.clone(),
+            relay_lists,
             azzamo_block_pubkeys_receiver,
         }
     }
@@ -143,8 +142,8 @@ impl InnerPolicy {
             ah::bail!("event from the future");
         }
 
-        if !self.no_nip66_discovery
-            && event.kind == EventKind::RelayDiscovery
+        if ((!self.no_gossip_discovery && event.kind == EventKind::RelayList)
+            || (!self.no_nip66_discovery && event.kind == EventKind::RelayDiscovery))
             && !self.is_spam(event)
         {
             return Ok(());
@@ -187,7 +186,7 @@ impl InnerPolicy {
             && event
                 .tags
                 .public_keys()
-                .find(|i| self.pubkeys.contains(i))
+                .find(|i| self.pubkeys.contains(*i))
                 .is_some()
     }
 

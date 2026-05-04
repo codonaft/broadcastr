@@ -4,10 +4,11 @@ use crate::{
     nostr_utils::has_publish_limitation,
     policy::InnerPolicy,
     proxied_client_builder,
-    relay_lists::{GossipRelayLists, RelayLists},
+    relay_lists::{MAX_GOSSIP_RELAYS_PER_USER, MAX_SEEN_AUTHORS, RelayLists},
 };
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
+use indexmap::IndexSet;
 use lru::LruCache;
 use nostr::{
     Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, TagStandard, Timestamp,
@@ -24,6 +25,7 @@ use nostr_sdk::{
 use reqwest::{Client as HttpClient, Url};
 use std::{
     collections::{HashMap, HashSet},
+    iter::once,
     net::IpAddr,
     num::NonZeroUsize,
     ops::Sub,
@@ -36,8 +38,6 @@ use tokio::{
 };
 
 const MAX_CONCURRENT_FAILURE_CHECKS: usize = 4;
-const MAX_GOSSIP_RELAYS: usize = 3;
-const MAX_SEEN_AUTHORS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 const FATAL_CONNECTION_ERRORS: [&str; 7] = [
     "dns error",
     "InvalidCertificate",
@@ -50,6 +50,10 @@ const FATAL_CONNECTION_ERRORS: [&str; 7] = [
 const WARMUP: Duration = Duration::from_secs(15);
 const WEEK_SECS: u64 = 7 * 24 * 60 * 60;
 
+const MAX_GOSSIP_RELAYS: NonZeroUsize = NonZeroUsize::new(MAX_GOSSIP_RELAYS_PER_USER)
+    .unwrap()
+    .saturating_mul(MAX_SEEN_AUTHORS);
+
 #[derive(Debug)]
 pub(crate) struct Relays {
     pub nostr_client: NostrClient,
@@ -59,11 +63,22 @@ pub(crate) struct Relays {
     pub seen_authors: Mutex<LruCache<PublicKey, ()>>,
     pub seen_relay_info_after_failure: RwLock<HashSet<RelayUrl>>,
     pub relays_failure_budget: Semaphore,
+    pub handle_event: Arc<Mutex<()>>,
 }
 
+#[derive(Debug)]
 pub(crate) struct RelaysAndSenders {
     pub relays: Arc<Relays>,
     pub azzamo_block_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
+}
+
+// TODO: remove Eq?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateMode {
+    InitializeRelays,
+    InitializeGossip,
+    FullGossipUpdate,
+    PartialGossipUpdate,
 }
 
 #[derive(Debug)]
@@ -73,75 +88,121 @@ struct QueryEvent {
 }
 
 impl Relays {
-    pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
-        let _ = Self::step(this.clone(), false).await;
+    pub(crate) async fn init(this: Arc<Self>) {
+        let _ = Self::step(this, UpdateMode::InitializeRelays).await;
+    }
 
+    pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
         let mut interval = time::interval(this.args.update_interval.0);
+
+        interval.tick().await;
+        let _ = Self::step(this.clone(), UpdateMode::InitializeGossip).await;
+
         loop {
             interval.tick().await;
             retry_with_backoff_endless(this.args.clone(), || {
                 let this = this.clone();
-                async move { Ok(Self::step(this, true).await?) }
+                async move { Ok(Self::step(this, UpdateMode::FullGossipUpdate).await?) }
             })
             .await?;
         }
     }
 
-    async fn step(this: Arc<Self>, initialized: bool) -> ah::Result<()> {
-        if let Err(e) = Self::update_relays(&this, initialized).await {
+    async fn step(this: Arc<Self>, mode: UpdateMode) -> ah::Result<()> {
+        let handle = this.handle_event.clone();
+        let lock = handle.lock();
+
+        if let Err(e) = this.update_relays(mode).await {
             log::error!("failed to update relays: {e}");
         }
-        Self::update_connections(&this).await;
-        Self::update_subscriptions(this, initialized).await?;
+        Self::update_subscriptions(this, mode).await?;
+
+        drop(lock);
         Ok(())
     }
 
-    async fn update_relays(this: &Arc<Self>, initialized: bool) -> ah::Result<()> {
-        log::info!("updating relays");
+    async fn update_relays(&self, mode: UpdateMode) -> ah::Result<()> {
+        log::info!("updating relays mode {mode:?}");
 
         let RelayLists {
             read_write,
             read,
             block,
-            gossip,
-        } = RelayLists::new(this).await?;
+            author_to_relays,
+        } = RelayLists::new(self, mode).await?;
 
-        if read_write.is_empty() && read.is_empty() && !block.is_empty() {
-            let relay_lists = this.policy.relay_lists();
+        if read_write.is_empty()
+            && read.is_empty()
+            && author_to_relays.is_empty()
+            && !block.is_empty()
+        {
+            let relay_lists = self.policy.relay_lists();
             let mut write = relay_lists.write().await;
             *write = RelayLists {
                 read_write,
                 read,
                 block: Default::default(),
-                gossip,
+                author_to_relays,
             };
             return Err(ah::anyhow!("all relays are blocked"));
         }
 
+        let gossip_read_write = author_to_relays
+            .clone()
+            .into_values()
+            .flat_map(|i| i.into_iter())
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .take(MAX_GOSSIP_RELAYS.into())
+            .collect::<IndexSet<_>>();
+
         for i in &block {
-            let _ = this.nostr_client.remove_relay(i).force().await;
+            let _ = self.nostr_client.remove_relay(i).force().await;
         }
 
-        if initialized {
-            let gossip = GossipRelayLists::fetch(this, &block).await?;
-            for i in gossip.write.iter().take(MAX_GOSSIP_RELAYS) {
-                let _ = this
+        if mode != UpdateMode::InitializeRelays {
+            let client_relays = self.nostr_client.relays().await;
+            let missing_gossip_relays = gossip_read_write
+                .sub(&client_relays.clone().into_keys().collect::<IndexSet<_>>())
+                .into_iter()
+                .collect::<HashSet<_>>();
+            let all_relays = client_relays
+                .len()
+                .saturating_add(missing_gossip_relays.len());
+            if let Some(max_relays) = self.args.max_relays
+                && all_relays >= max_relays.into()
+            {
+                let missing_pool_size = all_relays.saturating_sub(max_relays.into());
+                if missing_pool_size > 0 {
+                    log::info!("preempting relays for {missing_pool_size} new gossip relays");
+                    let offline = client_relays
+                        .iter()
+                        .filter(|(_, i)| !i.status().is_connected());
+                    let connected = client_relays
+                        .iter()
+                        .filter(|(_, i)| i.status().is_connected());
+                    for i in offline
+                        .chain(connected)
+                        .map(|(i, _)| i)
+                        .filter(|i| !gossip_read_write.contains(*i))
+                        .take(missing_pool_size)
+                    {
+                        let _ = self.nostr_client.remove_relay(i).force().await;
+                    }
+                }
+            }
+
+            for i in &gossip_read_write {
+                let _ = self
                     .nostr_client
                     .add_relay(i)
                     .capabilities(RelayCapabilities::READ | RelayCapabilities::WRITE)
                     .await;
             }
-            for i in gossip.read.iter().take(MAX_GOSSIP_RELAYS) {
-                let _ = this
-                    .nostr_client
-                    .add_relay(i)
-                    .capabilities(RelayCapabilities::READ)
-                    .await;
-            }
         }
 
         for i in &read {
-            let _ = this
+            let _ = self
                 .nostr_client
                 .add_relay(i)
                 .capabilities(RelayCapabilities::READ)
@@ -149,7 +210,7 @@ impl Relays {
         }
 
         for i in &read_write {
-            let _ = this
+            let _ = self
                 .nostr_client
                 .add_relay(i)
                 .capabilities(RelayCapabilities::READ | RelayCapabilities::WRITE)
@@ -157,36 +218,37 @@ impl Relays {
         }
 
         {
-            let relay_lists = this.policy.relay_lists();
+            let relay_lists = self.policy.relay_lists();
             let mut write = relay_lists.write().await;
             *write = RelayLists {
                 read_write,
                 read,
                 block,
-                gossip,
+                author_to_relays,
             };
         }
 
         log::debug!("finished updating relays");
+        self.reconnect().await;
         Ok(())
     }
 
-    async fn update_connections(this: &Arc<Self>) {
+    async fn reconnect(&self) {
         log::info!("updating connections");
         let start = Instant::now();
-        this.nostr_client
+        self.nostr_client
             .connect()
-            .and_wait(this.args.connect_timeout.0)
+            .and_wait(self.args.connect_timeout.0)
             .await;
         let elapsed = elapsed(start);
 
-        let client_relays = this.nostr_client.relays().await;
+        let client_relays = self.nostr_client.relays().await;
         let connected_relays = client_relays
             .values()
             .filter(|i| i.status().is_connected())
             .count();
 
-        let blocked_relays = this
+        let blocked_relays = self
             .policy
             .blocked_relays()
             .await
@@ -201,16 +263,18 @@ impl Relays {
         log::debug!("reconnected in {elapsed}, blocked relays: {blocked_relays:?}");
     }
 
-    async fn update_subscriptions(this: Arc<Self>, initialized: bool) -> ah::Result<()> {
+    async fn update_subscriptions(this: Arc<Self>, mode: UpdateMode) -> ah::Result<()> {
         let mut futures = vec![];
-        let timeout = if initialized {
-            this.args.update_interval.0
-        } else {
-            *humantime::Duration::from(WARMUP)
-        };
+        let timeout =
+            if mode == UpdateMode::InitializeRelays || mode == UpdateMode::InitializeGossip {
+                *humantime::Duration::from(WARMUP)
+            } else {
+                this.args.update_interval.0
+            };
         let policy = ReqExitPolicy::WaitDurationAfterEOSE(timeout);
 
-        if this.args.subscribe
+        if (mode == UpdateMode::FullGossipUpdate || mode == UpdateMode::PartialGossipUpdate)
+            && this.args.subscribe
             && let (Some(pubkeys), Some(kinds)) =
                 (this.args.pubkeys.clone(), this.args.kinds.clone())
         {
@@ -237,9 +301,7 @@ impl Relays {
                                 .any(|i| i.match_event(&event, MatchEventOptions::default()))
                             {
                                 let event_id = event.id;
-                                log::debug!(
-                                    "received broadcastable event {event_id} from subscription"
-                                );
+                                log::info!("received event {event_id} from subscription");
                                 let _ =
                                     Self::spawn_handle_event(this.clone(), event, None, true).await;
                             }
@@ -262,7 +324,11 @@ impl Relays {
         if !this.args.no_nip66_discovery && pool_has_empty_space {
             futures.push(tokio::spawn(async move {
                 let filter = this
-                    .filter_in_update_interval_with_age(if initialized { 0 } else { WEEK_SECS })
+                    .filter_in_update_interval_with_age(if mode == UpdateMode::InitializeRelays {
+                        WEEK_SECS
+                    } else {
+                        0
+                    })
                     .kind(EventKind::RelayDiscovery);
                 let mut stream = this
                     .nostr_client
@@ -334,8 +400,14 @@ impl Relays {
 
     async fn handle_event(this: Arc<Self>, event: Event) -> ah::Result<()> {
         {
-            this.seen_authors.lock().await.put(event.pubkey, ());
+            let mut lock = this.seen_authors.lock().await;
+            for i in once(event.pubkey).chain(event.tags.public_keys().copied()) {
+                lock.put(i, ());
+            }
         }
+
+        let lock = this.handle_event.lock().await;
+        this.update_relays(UpdateMode::PartialGossipUpdate).await?;
 
         let event_id = event.id;
         let QueryEvent {
@@ -386,13 +458,15 @@ impl Relays {
                         .saturating_add(relays_without_event.len()),
                 );
                 Self::ignore_failing_relays_without_our_events(
-                    this,
+                    this.clone(),
                     relays_without_event,
                     Some(&event),
                 )
                 .await;
             }
         }
+
+        drop(lock);
         Ok(())
     }
 
@@ -547,7 +621,7 @@ impl Relays {
         relay_url: &RelayUrl,
         event: Option<&Event>,
     ) -> ah::Result<()> {
-        let mut authors: HashSet<PublicKey> = self.args.pubkeys.clone().unwrap_or_default().0;
+        let mut authors: IndexSet<PublicKey> = self.args.pubkeys.clone().unwrap_or_default().0;
         if let Some(event) = event {
             authors.insert(event.pubkey);
         }
@@ -610,7 +684,7 @@ impl Relays {
                         .await;
                 },
                 _ => {
-                    log::debug!("relay {relay_url} answered {err:?}");
+                    log::debug!("relay {relay_url} error: {err:?}");
                 },
             }
             Ok::<_, ah::Error>(())
@@ -682,6 +756,7 @@ impl RelaysAndSenders {
             seen_authors: Mutex::new(LruCache::new(MAX_SEEN_AUTHORS)),
             seen_relay_info_after_failure,
             relays_failure_budget: Semaphore::const_new(MAX_CONCURRENT_FAILURE_CHECKS),
+            handle_event: Arc::new(Mutex::new(())),
         });
 
         Ok(Self {

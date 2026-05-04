@@ -226,6 +226,8 @@ dependencies = [
  "governor",
  "httparse",
  "humantime",
+ "indexmap",
+ "itertools",
  "log",
  "lru 0.18.0",
  "nonzero_ext",
@@ -1097,6 +1099,15 @@ checksum = "25e659a4bb38e810ebc252e53b5814ff908a8c58c2a9ce2fae1bbec24cbf4e20"
 dependencies = [
  "memchr",
  "serde",
+]
+
+[[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
 ]
 
 [[package]]

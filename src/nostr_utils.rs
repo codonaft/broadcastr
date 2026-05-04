@@ -4,13 +4,14 @@ use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use futures_util::stream::SplitSink;
 use httparse::Status;
+use indexmap::IndexSet;
 use nostr::{
     ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey, RelayMessage, SubscriptionId,
     nips::nip11::{Limitation, RelayInformationDocument},
     serde_json,
 };
 use reqwest::header;
-use std::{borrow::Cow, collections::HashSet, net::IpAddr, str::FromStr, sync::Arc};
+use std::{borrow::Cow, net::IpAddr, str::FromStr, sync::Arc};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
 use tungstenite::{
@@ -19,10 +20,10 @@ use tungstenite::{
 };
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct PublicKeys(pub HashSet<PublicKey>);
+pub(crate) struct PublicKeys(pub IndexSet<PublicKey>);
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct EventKinds(pub HashSet<EventKind>);
+pub(crate) struct EventKinds(pub IndexSet<EventKind>);
 
 #[derive(Default, Debug)]
 struct ParsedHttpHeaders {
@@ -127,6 +128,7 @@ async fn handle_client_message(
         Event(event) => {
             let event = event.into_owned();
             let event_id = event.id;
+            log::info!("received event {event_id} from ws request");
             let (success, message) =
                 match Relays::spawn_handle_event(relays, event, ip, false).await {
                     Ok(()) => (true, "".to_string()),

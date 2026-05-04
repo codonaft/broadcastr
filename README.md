@@ -34,7 +34,7 @@ cargo install --locked --force --git https://github.com/codonaft/broadcastr
 
 ## Run
 ```
-broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json --read-relays wss://nostr.wine,wss://monitorlizard.nostr1.com,wss://relay.nostr.watch,wss://relaypag.es
+broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json --read-relays wss://profiles.nostr1.com,wss://user.kindpag.es,wss://relay.vertexlab.io,wss://monitorlizard.nostr1.com,wss://relay.nostr.watch,wss://relaypag.es
 ```
 
 <details>
@@ -48,7 +48,8 @@ Broadcast Nostr events to other relays
 
 Options:
   --listen          the listener ws URI (e.g. "ws://localhost:8080")
-  --relays          relays or relay-list URIs (comma-separated, e.g.
+  --relays          relays or relay-list URIs in a descending order of priority
+                    (comma-separated, e.g.
                     "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
   --read-relays     same, but for read-only relays; overrides the --relays
                     entries

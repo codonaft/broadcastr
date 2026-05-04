@@ -12,9 +12,9 @@ use backoff::{
     future::{Retry, Sleeper},
 };
 use const_format::concatcp;
-use core::num::NonZeroUsize;
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use git_version::git_version;
+use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
 use nostr::{JsonUtil, nips::nip11::RelayInformationDocument, types::Host};
@@ -24,7 +24,11 @@ use reqwest::{ClientBuilder, Proxy, Url};
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
-    collections::HashSet, net::SocketAddr, num::NonZeroU32, str::FromStr, sync::Arc, time::Duration,
+    net::SocketAddr,
+    num::{NonZeroU32, NonZeroUsize},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
 };
 use tokio::net::TcpListener;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
@@ -32,6 +36,7 @@ use tungstenite::protocol::WebSocketConfig;
 
 pub(crate) const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
+const MIN_POOL_SIZE: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 const MIN_SIZE: usize = 128;
 const SHUTDOWN: &str = "shutdown";
 
@@ -43,7 +48,7 @@ struct Broadcastr {
     #[argh(option)]
     listen: Url,
 
-    /// relays or relay-list URIs
+    /// relays or relay-list URIs in a descending order of priority
     /// (comma-separated, e.g. "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
     #[argh(option)]
     relays: Option<Urls>,
@@ -153,7 +158,7 @@ struct Broadcastr {
 }
 
 #[derive(Debug, Clone, Default)]
-struct Urls(HashSet<Url>);
+struct Urls(IndexSet<Url>);
 
 #[derive(Debug, Clone)]
 struct DurationArg(Duration);
@@ -186,6 +191,12 @@ async fn main() -> ah::Result<()> {
 
     if args.no_mentions && args.pubkeys.is_none() {
         ah::bail!("--pubkeys required for --no-mentions");
+    }
+
+    if let Some(max_relays) = args.max_relays
+        && max_relays < MIN_POOL_SIZE
+    {
+        ah::bail!("--max-relays should be at least {MIN_POOL_SIZE}");
     }
 
     log::info!("starting {:#?}", args);
@@ -245,7 +256,8 @@ async fn main() -> ah::Result<()> {
             s.start(SubsystemBuilder::new(
                 "main",
                 async move |subsys: &mut SubsystemHandle| {
-                    let relays = relays.clone();
+                    Relays::init(relays.clone()).await;
+
                     let listeners = new_listeners(&args).await?.into_iter().map({
                         let relays = relays.clone();
                         move |listener| serve(listener, ws_config, relays.clone()).boxed()
