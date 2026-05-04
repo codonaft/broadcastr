@@ -8,6 +8,7 @@ use crate::{
 };
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
+use lru::LruCache;
 use nostr::{
     Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, TagStandard, Timestamp,
     event::TagKind, filter::MatchEventOptions, nips::nip11::RelayInformationDocument, serde_json,
@@ -24,17 +25,19 @@ use reqwest::{Client as HttpClient, Url};
 use std::{
     collections::{HashMap, HashSet},
     net::IpAddr,
+    num::NonZeroUsize,
     ops::Sub,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{RwLock, Semaphore, watch},
+    sync::{Mutex, RwLock, Semaphore, watch},
     time,
 };
 
 const MAX_CONCURRENT_FAILURE_CHECKS: usize = 4;
 const MAX_GOSSIP_RELAYS: usize = 3;
+const MAX_SEEN_AUTHORS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 const FATAL_CONNECTION_ERRORS: [&str; 7] = [
     "dns error",
     "InvalidCertificate",
@@ -53,6 +56,7 @@ pub(crate) struct Relays {
     pub http_client: HttpClient,
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
+    pub seen_authors: Mutex<LruCache<PublicKey, ()>>,
     pub seen_relay_info_after_failure: RwLock<HashSet<RelayUrl>>,
     pub relays_failure_budget: Semaphore,
 }
@@ -329,6 +333,10 @@ impl Relays {
     }
 
     async fn handle_event(this: Arc<Self>, event: Event) -> ah::Result<()> {
+        {
+            this.seen_authors.lock().await.put(event.pubkey, ());
+        }
+
         let event_id = event.id;
         let QueryEvent {
             found_on_relays,
@@ -671,6 +679,7 @@ impl RelaysAndSenders {
             http_client,
             args: args.clone(),
             policy: Arc::new(Policy::new(policy, args)),
+            seen_authors: Mutex::new(LruCache::new(MAX_SEEN_AUTHORS)),
             seen_relay_info_after_failure,
             relays_failure_budget: Semaphore::const_new(MAX_CONCURRENT_FAILURE_CHECKS),
         });

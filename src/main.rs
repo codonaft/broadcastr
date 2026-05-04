@@ -84,7 +84,7 @@ struct Broadcastr {
 
     /// consume less resources but block possibly failing relays more aggressively
     #[argh(switch)]
-    no_nip11_requests: bool, // TODO
+    no_nip11_requests: bool,
 
     /// don't use azzamo.net for spam filtering
     #[argh(switch)]

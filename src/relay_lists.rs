@@ -167,14 +167,31 @@ impl GossipRelayLists {
         relays: &Relays,
         block: &BTreeSet<RelayUrl>,
     ) -> ah::Result<GossipRelayLists> {
+        let seen_authors = {
+            relays
+                .seen_authors
+                .lock()
+                .await
+                .iter()
+                .map(|(i, _)| *i)
+                .collect::<HashSet<_>>()
+        };
+        let authors = relays
+            .args
+            .pubkeys
+            .clone()
+            .unwrap_or_default()
+            .0
+            .iter()
+            .copied()
+            .chain(seen_authors)
+            .collect::<HashSet<_>>();
+
         let mut lists = GossipRelayLists::default();
-        if !relays.args.no_gossip_discovery
-            && let Some(pubkeys) = &relays.args.pubkeys
-        {
-            // TODO: if no pubkeys - extract them from events we've broadcasted
+        if !relays.args.no_gossip_discovery && !authors.is_empty() {
             let filter = Filter::new()
                 .kind(EventKind::RelayList)
-                .authors(pubkeys.0.iter().copied());
+                .authors(authors.iter().copied());
             for event in relays
                 .nostr_client
                 .fetch_events(filter)
@@ -197,6 +214,9 @@ impl GossipRelayLists {
                 }
             }
         }
+
+        log::debug!("found gossip relays {lists:?} for {authors:?}");
+
         Ok(lists)
     }
 }
