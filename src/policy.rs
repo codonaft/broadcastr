@@ -17,7 +17,6 @@ use tokio::sync::{Mutex, RwLock, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 
-// TODO: rename
 #[derive(Debug)]
 pub(crate) struct Policy {
     inner: InnerPolicy,

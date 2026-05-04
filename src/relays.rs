@@ -191,20 +191,52 @@ impl Relays {
     }
 
     async fn update_subscriptions(this: Arc<Self>, initialized: bool) -> ah::Result<()> {
-        let broadcast_filters = if this.args.subscribe
+        let mut futures = vec![];
+        let timeout = this.args.update_interval.0;
+        let policy = ReqExitPolicy::WaitDurationAfterEOSE(timeout);
+
+        if this.args.subscribe
             && let (Some(pubkeys), Some(kinds)) =
                 (this.args.pubkeys.clone(), this.args.kinds.clone())
         {
-            let filter = this.filter_in_update_interval_with_age(0).kinds(kinds.0);
-            vec![
-                filter.clone().authors(pubkeys.0.iter().copied()),
-                filter.pubkeys(pubkeys.0),
-            ]
-        } else {
-            vec![]
-        };
+            let this = this.clone();
+            futures.push(tokio::spawn(async move {
+                let filter = this.filter_in_update_interval_with_age(0).kinds(kinds.0);
+                let filters = [
+                    filter.clone().authors(pubkeys.0.iter().copied()),
+                    filter.pubkeys(pubkeys.0),
+                ];
+                let mut stream = this
+                    .nostr_client
+                    .stream_events(filters.clone())
+                    .timeout(timeout)
+                    .policy(policy)
+                    .await
+                    .context("subscription")?;
 
-        let relay_lists: RelayLists = { this.policy.relay_lists().read().await.clone() };
+                while let Some((stream_relay_url, stream_event)) = stream.next().await {
+                    match stream_event {
+                        Ok(event) => {
+                            if filters
+                                .iter()
+                                .any(|i| i.match_event(&event, MatchEventOptions::default()))
+                            {
+                                let event_id = event.id;
+                                log::debug!(
+                                    "received broadcastable event {event_id} from subscription"
+                                );
+                                let _ =
+                                    Self::spawn_handle_event(this.clone(), event, None, true).await;
+                            }
+                        },
+                        Err(e) => {
+                            Self::spawn_handle_relay_error(this.clone(), e, stream_relay_url).await;
+                        },
+                    }
+                }
+                Ok::<_, ah::Error>(())
+            }));
+        }
 
         let pool_has_empty_space = if let Some(max) = this.args.max_relays {
             this.nostr_client.relays().await.len() < max.get()
@@ -212,70 +244,60 @@ impl Relays {
             true
         };
 
-        let mut filters = broadcast_filters.clone();
         if !this.args.no_nip66_discovery && pool_has_empty_space {
-            filters.push(
-                this.filter_in_update_interval_with_age(if initialized { 0 } else { WEEK_SECS })
-                    .kind(EventKind::RelayDiscovery),
-            );
+            futures.push(tokio::spawn(async move {
+                let filter = this
+                    .filter_in_update_interval_with_age(if initialized { 0 } else { WEEK_SECS })
+                    .kind(EventKind::RelayDiscovery);
+                let mut stream = this
+                    .nostr_client
+                    .stream_events(filter)
+                    .timeout(timeout)
+                    .policy(policy)
+                    .await
+                    .context("relay_discovery")?;
+
+                let mut discovered = 0;
+                let relay_lists: RelayLists = { this.policy.relay_lists().read().await.clone() };
+                while let Some((stream_relay_url, stream_event)) = stream.next().await {
+                    match stream_event {
+                        Ok(event) => {
+                            if event.kind == EventKind::RelayDiscovery
+                                && !this.args.no_nip66_discovery
+                                && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
+                                && !relay_lists.contains(&url)
+                            {
+                                log::debug!("discovered relay {url}");
+                                let _ = this
+                                    .nostr_client
+                                    .add_relay(url)
+                                    .capabilities(
+                                        RelayCapabilities::READ | RelayCapabilities::WRITE,
+                                    )
+                                    .await;
+                                discovered += 1;
+                            }
+                        },
+                        Err(e) => {
+                            Self::spawn_handle_relay_error(this.clone(), e, stream_relay_url).await;
+                        },
+                    }
+                }
+
+                log::info!("discovered {discovered} new relays");
+                Ok::<_, ah::Error>(())
+            }));
         }
 
-        if filters.is_empty() {
-            return Ok(());
-        }
-
-        log::info!("updating subscriptions");
-        log::debug!("{filters:?}");
         let start = Instant::now();
-
-        let timeout = this.args.update_interval.0;
-        let mut stream = this
-            .nostr_client
-            .stream_events(filters)
-            .timeout(timeout)
-            .policy(ReqExitPolicy::WaitDurationAfterEOSE(timeout))
+        let result = join_all(futures)
             .await
-            .context("subscriptions")?;
-
-        let mut discovered = 0;
-        while let Some((stream_relay_url, stream_event)) = stream.next().await {
-            match stream_event {
-                Ok(event) => {
-                    if event.kind == EventKind::RelayDiscovery
-                        && !this.args.no_nip66_discovery
-                        && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
-                        && !relay_lists.contains(&url)
-                    {
-                        log::debug!("discovered relay {url}");
-                        let _ = this
-                            .nostr_client
-                            .add_relay(url)
-                            .capabilities(RelayCapabilities::READ | RelayCapabilities::WRITE)
-                            .await;
-                        discovered += 1;
-                    }
-
-                    if broadcast_filters
-                        .iter()
-                        .any(|i| i.match_event(&event, MatchEventOptions::default()))
-                    {
-                        let event_id = event.id;
-                        log::debug!("received broadcastable event {event_id} from subscription");
-                        let _ = Self::spawn_handle_event(this.clone(), event, None, true).await;
-                    }
-                },
-                Err(e) => {
-                    Self::spawn_handle_relay_error(this.clone(), e, stream_relay_url).await?;
-                },
-            }
-        }
-
-        log::info!(
-            "discovered {discovered} new relays, closed all subscriptions after {}",
-            elapsed(start)
-        );
-
-        Ok(())
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map(|_| ())
+            .inspect_err(|e| log::error!("subscriptions: {e}"));
+        log::info!("closed all subscriptions after {}", elapsed(start));
+        result.map_err(ah::Error::from)
     }
 
     pub(crate) async fn spawn_handle_event(
@@ -556,11 +578,7 @@ impl Relays {
             .until(Timestamp::from_secs(now.saturating_add(interval)))
     }
 
-    async fn spawn_handle_relay_error(
-        this: Arc<Self>,
-        err: RelayError,
-        relay_url: RelayUrl,
-    ) -> ah::Result<()> {
+    async fn spawn_handle_relay_error(this: Arc<Self>, err: RelayError, relay_url: RelayUrl) {
         tokio::spawn(async {
             match err {
                 RelayError::RelayMessage(text) => {
@@ -581,7 +599,6 @@ impl Relays {
             }
             Ok::<_, ah::Error>(())
         });
-        Ok(())
     }
 
     async fn block(&self, relay_url: &RelayUrl, reason: &str) -> ah::Result<()> {
