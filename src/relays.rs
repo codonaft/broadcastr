@@ -29,10 +29,11 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{RwLock, watch},
+    sync::{RwLock, Semaphore, watch},
     time,
 };
 
+const MAX_CONCURRENT_FAILURE_CHECKS: usize = 4;
 const MAX_GOSSIP_RELAYS: usize = 3;
 const FATAL_CONNECTION_ERRORS: [&str; 7] = [
     "dns error",
@@ -53,6 +54,7 @@ pub(crate) struct Relays {
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
     pub seen_relay_info_after_failure: RwLock<HashSet<RelayUrl>>,
+    pub relays_failure_budget: Semaphore,
 }
 
 pub(crate) struct RelaysAndSenders {
@@ -400,6 +402,8 @@ impl Relays {
         event: Option<&Event>,
     ) {
         join_all(relays_without_event.into_iter().map(async |relay_url| {
+            let lock = this.relays_failure_budget.acquire().await;
+            log::debug!("checking {relay_url} after failure");
             let relay = this
                 .nostr_client
                 .relay(&relay_url)
@@ -531,6 +535,8 @@ impl Relays {
                 this.block_if_no_events_with_same_author(&relay_url, event)
                     .await?;
             }
+
+            drop(lock);
             Ok(())
         }))
         .await;
@@ -589,7 +595,7 @@ impl Relays {
     }
 
     async fn spawn_handle_relay_error(this: Arc<Self>, err: RelayError, relay_url: RelayUrl) {
-        tokio::spawn(async {
+        tokio::spawn(async move {
             match err {
                 RelayError::RelayMessage(text) => {
                     for reason in ["auth-required", "blocked", "restricted"] {
@@ -674,6 +680,7 @@ impl RelaysAndSenders {
             args: args.clone(),
             policy: Arc::new(Policy::new(policy, args)),
             seen_relay_info_after_failure,
+            relays_failure_budget: Semaphore::const_new(MAX_CONCURRENT_FAILURE_CHECKS),
         });
 
         Ok(Self {
