@@ -36,9 +36,12 @@ use tungstenite::protocol::WebSocketConfig;
 
 pub(crate) const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
-const MIN_POOL_SIZE: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+const MIN_POOL_SIZE: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 const MIN_SIZE: usize = 128;
 const SHUTDOWN: &str = "shutdown";
+
+const VERSION: &str = concatcp!(env!("CARGO_PKG_VERSION"), '-', git_version!());
+const USER_AGENT: &str = concatcp!(env!("CARGO_PKG_NAME"), '/', VERSION);
 
 #[derive(FromArgs, Clone, Debug)]
 #[argh(help_triggers("-h", "--help"))]
@@ -199,7 +202,7 @@ async fn main() -> ah::Result<()> {
         ah::bail!("--max-relays should be at least {MIN_POOL_SIZE}");
     }
 
-    log::info!("starting {:#?}", args);
+    log::info!("starting {VERSION} {args:#?}");
 
     let _ = crypto::CryptoProvider::install_default(crypto::ring::default_provider());
 
@@ -304,7 +307,7 @@ async fn serve(
         let body = RelayInformationDocument {
             name: Some("broadcastr".to_string()),
             software: Some("git+https://github.com/codonaft/broadcastr".to_string()),
-            version: Some(concatcp!(env!("CARGO_PKG_VERSION"), '-', git_version!()).to_string()),
+            version: Some(VERSION.to_string()),
             icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
             ..Default::default()
         }
@@ -375,6 +378,7 @@ fn proxied_client_builder(args: &Broadcastr) -> ah::Result<ClientBuilder> {
     }
 
     let client = ClientBuilder::new()
+        .user_agent(USER_AGENT)
         .connect_timeout(args.connect_timeout.0)
         .timeout(args.request_timeout.0);
     let client = if let Some(proxy) = args.proxy {

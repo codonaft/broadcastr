@@ -1,9 +1,13 @@
 use super::Broadcastr;
-use crate::relays::{Relays, UpdateMode};
+use crate::{
+    proxied_client_builder,
+    relays::{RelayListCreatedAt, Relays, UpdateMode},
+};
 use anyhow::{self as ah, Context};
 use futures::future::{join_all, try_join_all};
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
+use lru::LruCache;
 use nostr::{
     Kind as EventKind, Timestamp,
     filter::{Filter, MatchEventOptions},
@@ -12,12 +16,11 @@ use nostr::{
     serde_json,
     types::RelayUrl,
 };
-use nostr_sdk::relay::{RelayCapabilities, RelayStatus};
-use reqwest::{ClientBuilder, Url};
+use reqwest::Url;
 use std::{fs::File, num::NonZeroUsize, ops::Sub};
 
 pub(crate) const MAX_SEEN_AUTHORS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
-pub(crate) const MAX_GOSSIP_RELAYS_PER_USER: usize = 3;
+pub(crate) const MAX_GOSSIP_RELAYS_PER_USER: usize = 5;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RelayLists {
@@ -25,71 +28,79 @@ pub(crate) struct RelayLists {
     pub read: IndexSet<RelayUrl>,
     pub block: IndexSet<RelayUrl>,
     pub author_to_relays: IndexMap<PublicKey, IndexSet<RelayUrl>>,
+    pub outdated: IndexSet<RelayUrl>,
 }
 
 impl RelayLists {
-    pub(crate) async fn new(relays: &Relays, mode: UpdateMode) -> ah::Result<Self> {
+    pub(crate) async fn new(
+        relays: &Relays,
+        mode: UpdateMode,
+        seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
+    ) -> ah::Result<Self> {
         let args = &relays.args;
-
-        let client_read_write = get_relays(
-            relays,
-            Some(RelayCapabilities::READ | RelayCapabilities::WRITE),
-            false,
-        )
-        .await;
-        let client_read = get_relays(relays, Some(RelayCapabilities::READ), false).await;
-        let client_block = get_relays(relays, None, true).await;
-
-        let empty = Default::default();
-        let futures = [
-            &args.relays.as_ref().unwrap_or(&empty).0,
-            &args.read_relays.as_ref().unwrap_or(&empty).0,
-            &args.block_relays.as_ref().unwrap_or(&empty).0,
-        ]
-        .into_iter()
-        .map(async |list| {
-            Self::fetch_and_parse(list, args)
-                .await
-                .inspect_err(|e| log::error!("fetch_and_parse {list:?}: {e:?}"))
-        });
+        let futures = [&args.relays, &args.read_relays, &args.block_relays]
+            .into_iter()
+            .map(async |list| {
+                if let Some(list) = list {
+                    Self::fetch_and_parse(&list.0, args)
+                        .await
+                        .inspect_err(|e| log::error!("fetch_and_parse {list:?}: {e:?}"))
+                } else {
+                    Ok(Default::default())
+                }
+            });
         let mut lists = join_all(futures)
             .await
             .into_iter()
             .collect::<Vec<ah::Result<IndexSet<_>>>>();
 
+        let currently_blocked = relays.policy.blocked_relays().await;
         let block = lists
             .pop()
             .context("block")?
             .context("block")?
             .into_iter()
-            .chain(client_block)
-            .chain(relays.policy.blocked_relays().await)
+            .chain(relays.banned_client_relays().await)
+            .chain(currently_blocked.clone())
             .collect::<IndexSet<_>>();
         let read = lists
             .pop()
             .context("read")?
             .unwrap_or_default()
             .into_iter()
-            .chain(client_read)
-            .collect::<IndexSet<_>>();
+            .collect::<IndexSet<_>>()
+            .sub(&block);
         let read_write = lists
             .pop()
             .context("read_write")?
             .unwrap_or_default()
             .into_iter()
-            .chain(client_read_write)
-            .collect::<IndexSet<_>>();
+            .collect::<IndexSet<_>>()
+            .sub(&block)
+            .sub(&read);
 
-        let read_write = read_write.sub(&block).sub(&read);
-        let read = read.sub(&block);
+        let author_to_relays =
+            Self::fetch_gossip_relays(relays, &block, mode, seen_pubkeys).await?;
 
-        let author_to_relays = Self::fetch_gossip_relays(relays, &block, mode).await?;
+        let outdated = relays
+            .client_relays()
+            .await
+            .sub(&currently_blocked)
+            .sub(&read_write)
+            .sub(&read)
+            .sub(
+                &author_to_relays
+                    .values()
+                    .flat_map(|i| i.iter().cloned())
+                    .collect::<IndexSet<_>>(),
+            );
 
         Ok(Self {
             read_write,
             read,
             block,
             author_to_relays,
+            outdated,
         })
     }
 
@@ -97,6 +108,7 @@ impl RelayLists {
         relays: &Relays,
         block: &IndexSet<RelayUrl>,
         mode: UpdateMode,
+        seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
     ) -> ah::Result<IndexMap<PublicKey, IndexSet<RelayUrl>>> {
         if mode == UpdateMode::InitializeRelays || relays.args.no_gossip_discovery {
             return Ok(Default::default());
@@ -119,16 +131,6 @@ impl RelayLists {
             None
         };
 
-        // TODO: weird connection?
-        let seen_authors = {
-            relays
-                .seen_authors
-                .lock()
-                .await
-                .iter()
-                .map(|(i, _)| *i)
-                .collect::<IndexSet<_>>()
-        };
         let mut authors = relays
             .args
             .pubkeys
@@ -137,7 +139,7 @@ impl RelayLists {
             .0
             .iter()
             .copied()
-            .chain(seen_authors)
+            .chain(seen_pubkeys.iter().map(|(i, _)| *i))
             .collect::<IndexSet<_>>();
 
         let mut author_to_relays = authors
@@ -161,17 +163,17 @@ impl RelayLists {
         let interval = relays.args.update_interval.0.as_secs();
         let now = Timestamp::now().as_secs();
         let filter = Filter::new()
+            .since(
+                seen_pubkeys
+                    .iter()
+                    .map(|(_, i)| i.to_u64().saturating_add(1))
+                    .reduce(u64::min)
+                    .unwrap_or_default()
+                    .into(),
+            )
             .until(Timestamp::from_secs(now.saturating_add(interval)))
             .kind(EventKind::RelayList)
             .authors(authors.iter().copied());
-
-        let filter = if mode == UpdateMode::InitializeGossip {
-            filter
-        } else {
-            filter.since(Timestamp::from_secs(now.saturating_sub(interval)))
-        };
-
-        log::info!("filter={filter:?}"); // TODO
 
         for event in relays
             .nostr_client
@@ -192,12 +194,24 @@ impl RelayLists {
         {
             log::info!("event={event:?}"); // TODO
             let pubkey = event.pubkey;
-            for (relay_url, _) in
-                nip65::extract_owned_relay_list(event).take(MAX_GOSSIP_RELAYS_PER_USER)
-            {
+            if !seen_pubkeys.contains(&pubkey) {
+                seen_pubkeys.put(pubkey, Default::default());
+            }
+            let entry = seen_pubkeys
+                .peek_mut(&pubkey)
+                .context("seen_pubkeys entry")?;
+            *entry = RelayListCreatedAt::new(
+                [entry.to_u64(), event.created_at.as_secs()]
+                    .into_iter()
+                    .reduce(u64::max),
+            );
+            for (relay_url, _) in nip65::extract_owned_relay_list(event) {
                 if !block.contains(&relay_url)
                     && let Some(urls) = author_to_relays.get_mut(&pubkey)
                 {
+                    if urls.len() >= MAX_GOSSIP_RELAYS_PER_USER {
+                        break;
+                    }
                     urls.insert(relay_url);
                 }
             }
@@ -229,9 +243,7 @@ impl RelayLists {
                         ah::anyhow!(r#"{}, expected format: ["ws://a","wss://b"]"#, e)
                     })?
                 } else if ["https", "http"].contains(&uri.scheme()) {
-                    ClientBuilder::new()
-                        .connect_timeout(args.connect_timeout.0)
-                        .timeout(args.request_timeout.0)
+                    proxied_client_builder(args)?
                         .build()?
                         .get(uri.as_ref())
                         .send()
@@ -258,23 +270,4 @@ impl RelayLists {
             || self.block.contains(url)
             || self.author_to_relays.values().any(|i| i.contains(url))
     }
-}
-
-async fn get_relays(
-    relays: &Relays,
-    caps: Option<RelayCapabilities>,
-    banned: bool,
-) -> Vec<RelayUrl> {
-    let builder = relays.nostr_client.relays();
-
-    if let Some(caps) = caps {
-        builder.with_capabilities(caps)
-    } else {
-        builder
-    }
-    .await
-    .values()
-    .filter(|i| banned == (i.status() == RelayStatus::Banned))
-    .map(|i| i.url().clone())
-    .collect()
 }

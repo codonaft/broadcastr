@@ -92,6 +92,22 @@ impl Policy {
         self.inner.relay_lists.read().await.block.clone()
     }
 
+    pub(crate) async fn read_write_for(&self, pubkeys: &HashSet<PublicKey>) -> IndexSet<RelayUrl> {
+        let lists = self.inner.relay_lists.read().await;
+        lists
+            .read_write
+            .iter()
+            .chain(
+                lists
+                    .author_to_relays
+                    .iter()
+                    .filter(|(i, _)| pubkeys.contains(i))
+                    .flat_map(|(_, i)| i.iter()),
+            )
+            .cloned()
+            .collect()
+    }
+
     pub(crate) fn relay_lists(&self) -> Arc<RwLock<RelayLists>> {
         self.inner.relay_lists.clone()
     }
