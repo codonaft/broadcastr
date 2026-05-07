@@ -54,7 +54,12 @@ impl RelayLists {
             .into_iter()
             .collect::<Vec<ah::Result<IndexSet<_>>>>();
 
-        let currently_blocked = relays.policy.blocked_relays().await;
+        let (old_gossip, currently_blocked) = {
+            let lists = relays.policy.relay_lists();
+            let lists = lists.read().await;
+            (lists.author_to_relays.clone(), lists.block.clone())
+        };
+
         let block = lists
             .pop()
             .context("block")?
@@ -80,7 +85,7 @@ impl RelayLists {
             .sub(&read);
 
         let author_to_relays =
-            Self::fetch_gossip_relays(relays, &block, mode, seen_pubkeys).await?;
+            Self::fetch_gossip_relays(relays, &block, mode, seen_pubkeys, old_gossip).await?;
 
         let outdated = relays
             .client_relays()
@@ -109,23 +114,14 @@ impl RelayLists {
         block: &IndexSet<RelayUrl>,
         mode: UpdateMode,
         seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
+        mut old_gossip: IndexMap<PublicKey, IndexSet<RelayUrl>>,
     ) -> ah::Result<IndexMap<PublicKey, IndexSet<RelayUrl>>> {
         if mode == UpdateMode::InitializeRelays || relays.args.no_gossip_discovery {
             return Ok(Default::default());
         }
 
-        let mut old_gossip = {
-            relays
-                .policy
-                .relay_lists()
-                .read() // TODO: too many readers?
-                .await
-                .author_to_relays
-                .clone()
-        };
-
         let cached_gossip = if mode == UpdateMode::PartialGossipUpdate {
-            // TODO: relay list is now connected to the instance of relay list
+            // TODO: relay list is now connected to the instance of relay list. make it static?
             Some(old_gossip.clone())
         } else {
             None
@@ -162,15 +158,14 @@ impl RelayLists {
 
         let interval = relays.args.update_interval.0.as_secs();
         let now = Timestamp::now().as_secs();
+        let since = seen_pubkeys
+            .iter()
+            .map(|(_, i)| i.to_u64().saturating_add(1))
+            .reduce(u64::min)
+            .unwrap_or_default()
+            .into();
         let filter = Filter::new()
-            .since(
-                seen_pubkeys
-                    .iter()
-                    .map(|(_, i)| i.to_u64().saturating_add(1))
-                    .reduce(u64::min)
-                    .unwrap_or_default()
-                    .into(),
-            )
+            .since(since)
             .until(Timestamp::from_secs(now.saturating_add(interval)))
             .kind(EventKind::RelayList)
             .authors(authors.iter().copied());
@@ -198,7 +193,7 @@ impl RelayLists {
                 seen_pubkeys.put(pubkey, Default::default());
             }
             let entry = seen_pubkeys
-                .peek_mut(&pubkey)
+                .get_mut(&pubkey)
                 .context("seen_pubkeys entry")?;
             *entry = RelayListCreatedAt::new(
                 [entry.to_u64(), event.created_at.as_secs()]

@@ -17,7 +17,7 @@ use git_version::git_version;
 use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::{JsonUtil, nips::nip11::RelayInformationDocument, types::Host};
+use nostr::{JsonUtil, nips::nip11::RelayInformationDocument};
 use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
@@ -385,8 +385,8 @@ fn proxied_client_builder(args: &Broadcastr) -> ah::Result<ClientBuilder> {
         client.proxy(Proxy::all(socks5(proxy)).map_err(ah::Error::from)?)
     } else if let Some(tor_proxy) = args.tor_proxy {
         client.proxy(Proxy::custom(move |url| {
-            if let Some(Host::Domain(host)) = url.host()
-                && host.ends_with(".onion")
+            if let Some(domain) = url.domain()
+                && domain.ends_with(".onion")
             {
                 Some(socks5(tor_proxy))
             } else {

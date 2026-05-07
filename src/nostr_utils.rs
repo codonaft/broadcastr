@@ -130,7 +130,7 @@ async fn handle_client_message(
             let event_id = event.id;
             log::info!("received event {event_id} from ws request");
             let (success, message) =
-                match Relays::spawn_handle_event(relays, event, ip, false).await {
+                match Relays::spawn_handle_event(relays, event, ip, Default::default()).await {
                     Ok(()) => (true, "".to_string()),
                     Err(e) => (false, format!("{e}")),
                 };

@@ -74,10 +74,6 @@ impl Policy {
         Ok(())
     }
 
-    pub(crate) async fn forget(&self, id: EventId) {
-        self.seen_event_ids.lock().await.pop(&id);
-    }
-
     pub(crate) async fn block_relay(&self, relay_url: &RelayUrl) {
         // TODO: ttl cache?
         self.inner
@@ -86,10 +82,6 @@ impl Policy {
             .await
             .block
             .insert(relay_url.clone());
-    }
-
-    pub(crate) async fn blocked_relays(&self) -> IndexSet<RelayUrl> {
-        self.inner.relay_lists.read().await.block.clone()
     }
 
     pub(crate) async fn read_write_for(&self, pubkeys: &HashSet<PublicKey>) -> IndexSet<RelayUrl> {
@@ -186,8 +178,8 @@ impl InnerPolicy {
     }
 
     async fn check_relay(&self, url: &RelayUrl) -> Result<AdmitStatus, PolicyError> {
-        let blocked_relays = &self.relay_lists.read().await.block;
-        let result = if blocked_relays.contains(url) {
+        let blocked = { self.relay_lists.read().await.block.contains(url) };
+        let result = if blocked {
             AdmitStatus::Rejected {
                 reason: Some("relay from block-list".to_string()),
             }
