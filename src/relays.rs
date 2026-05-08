@@ -7,6 +7,7 @@ use crate::{
     retry_with_backoff_endless,
 };
 use anyhow::{self as ah, Context};
+use core::convert::From;
 use futures::{StreamExt, future::join_all};
 use indexmap::{IndexMap, IndexSet};
 use lru::LruCache;
@@ -22,7 +23,7 @@ use nostr_sdk::{
     client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
     relay::{Error as RelayError, RelayEventLimits, RelayLimits, RelayStatus, ReqExitPolicy},
 };
-use reqwest::{Client as HttpClient, Url};
+use reqwest::{Client as HttpClient, Url, header};
 use std::{
     collections::{HashMap, HashSet},
     iter::once,
@@ -399,7 +400,7 @@ impl Relays {
                         .custom_tag(RELAY_NETWORK_TYPE, "clearnet"),
                 ];
 
-                if this.may_connect_to_tor() {
+                if this.maybe_can_connect_to_tor() {
                     filters.push(filter.custom_tag(RELAY_NETWORK_TYPE, "tor"));
                 }
 
@@ -422,7 +423,7 @@ impl Relays {
                         && !this.args.no_nip66_discovery
                         && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
                         && !relay_lists.contains(&url)
-                        && (this.may_connect_to_tor() || !is_onion_relay(&url))
+                        && (this.maybe_can_connect_to_tor() || !is_onion_relay(&url))
                     {
                         if event
                             .tags
@@ -668,14 +669,6 @@ impl Relays {
             if !has_limitation && !has_requirements && !has_info_from_discovery {
                 let relay = connected_relay.await?;
                 if relay.status() != RelayStatus::Connected {
-                    log::debug!("relay {relay_url} possibly failing");
-
-                    if this.args.no_nip11_requests {
-                        this.force_block(&relay_url, "possible fatal connection failure")
-                            .await;
-                        return Ok(());
-                    }
-
                     log::debug!("requesting relay info for {relay_url}");
                     let mut url = relay_url.as_str().parse::<Url>()?;
                     url.set_scheme(match url.scheme() {
@@ -688,7 +681,7 @@ impl Relays {
                     let info = this
                         .http_client
                         .get(url)
-                        .header(reqwest::header::ACCEPT, "application/nostr+json")
+                        .header(header::ACCEPT, "application/nostr+json")
                         .send()
                         .await;
                     match info {
@@ -852,7 +845,7 @@ impl Relays {
             .collect()
     }
 
-    pub(crate) fn may_connect_to_tor(&self) -> bool {
+    pub(crate) fn maybe_can_connect_to_tor(&self) -> bool {
         self.args.tor_proxy.is_some() || self.args.proxy.is_some()
     }
 }
@@ -895,7 +888,14 @@ impl RelaysAndSenders {
             .admit_policy(policy.clone())
             .build();
 
-        let http_client = proxied_client_builder(args)?.tcp_keepalive(None).build()?;
+        let http_client = proxied_client_builder(args)?
+            .pool_max_idle_per_host(0)
+            .default_headers(
+                [(header::CONNECTION, "close".parse()?)]
+                    .into_iter()
+                    .collect(),
+            )
+            .build()?;
 
         let relays = Arc::new(Relays {
             nostr_client,

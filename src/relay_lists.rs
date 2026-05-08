@@ -276,7 +276,7 @@ impl RelayLists {
                     ah::bail!("unexpected relay item {uri}");
                 }
                 .into_iter()
-                .filter(|uri| relays.may_connect_to_tor() || !is_onion_relay(uri));
+                .filter(|uri| relays.maybe_can_connect_to_tor() || !is_onion_relay(uri));
                 Ok(result)
             });
         let result = try_join_all(futures)
