@@ -17,7 +17,7 @@ use git_version::git_version;
 use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::{JsonUtil, nips::nip11::RelayInformationDocument};
+use nostr::{JsonUtil, nips::nip11::RelayInformationDocument, types::Timestamp};
 use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
@@ -64,6 +64,10 @@ struct Broadcastr {
     /// put public URL to your broadcastr here to avoid loops
     #[argh(option)]
     block_relays: Option<Urls>,
+
+    /// store automatically blocked relays for given amount (default is 2h)
+    #[argh(option, default = "DurationArg(Duration::from_hours(2))")]
+    block_ttl: DurationArg,
 
     /// allow some event kinds only
     /// (comma-separated allow-list, e.g "0,1,3,5,6,7,4550,34550")
@@ -140,7 +144,7 @@ struct Broadcastr {
     update_interval: DurationArg,
 
     /// max update backoff interval (default is 5m)
-    #[argh(option, default = "DurationArg(Duration::from_secs(5 * 60))")]
+    #[argh(option, default = "DurationArg(Duration::from_mins(5))")]
     max_backoff_interval: DurationArg,
 
     /// connection timeout (default is 15s)
@@ -420,6 +424,10 @@ where
         .with_max_interval(args.max_backoff_interval.0)
         .build();
     bf::future::retry(backoff, f)
+}
+
+fn now() -> Duration {
+    Duration::from_secs(Timestamp::now().as_secs())
 }
 
 impl FromStr for Urls {

@@ -1,6 +1,6 @@
 use super::Broadcastr;
 use crate::{
-    proxied_client_builder,
+    now, proxied_client_builder,
     relays::{RelayListCreatedAt, Relays, UpdateMode},
 };
 use anyhow::{self as ah, Context};
@@ -17,7 +17,7 @@ use nostr::{
     types::RelayUrl,
 };
 use reqwest::Url;
-use std::{fs::File, num::NonZeroUsize, ops::Sub};
+use std::{fs::File, num::NonZeroUsize, ops::Sub, time::Duration};
 
 pub(crate) const MAX_SEEN_AUTHORS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 pub(crate) const MAX_GOSSIP_RELAYS_PER_USER: usize = 5;
@@ -26,7 +26,7 @@ pub(crate) const MAX_GOSSIP_RELAYS_PER_USER: usize = 5;
 pub(crate) struct RelayLists {
     pub read_write: IndexSet<RelayUrl>,
     pub read: IndexSet<RelayUrl>,
-    pub block: IndexSet<RelayUrl>,
+    pub block: IndexMap<RelayUrl, Duration>,
     pub author_to_relays: IndexMap<PublicKey, IndexSet<RelayUrl>>,
     pub outdated: IndexSet<RelayUrl>,
 }
@@ -54,10 +54,17 @@ impl RelayLists {
             .into_iter()
             .collect::<Vec<ah::Result<IndexSet<_>>>>();
 
+        let now = now();
         let (old_gossip, currently_blocked) = {
             let lists = relays.policy.relay_lists();
             let lists = lists.read().await;
-            (lists.author_to_relays.clone(), lists.block.clone())
+            let block = lists
+                .block
+                .iter()
+                .filter(|(_, created)| now.saturating_sub(**created) < relays.args.block_ttl.0)
+                .map(|(url, created)| (url.clone(), *created))
+                .collect::<IndexMap<RelayUrl, Duration>>();
+            (lists.author_to_relays.clone(), block)
         };
 
         let block = lists
@@ -65,32 +72,42 @@ impl RelayLists {
             .context("block")?
             .context("block")?
             .into_iter()
-            .chain(relays.banned_client_relays().await)
+            .map(|i| (i, Duration::MAX))
+            .chain(
+                relays
+                    .banned_client_relays()
+                    .await
+                    .into_iter()
+                    .map(|i| (i, now)),
+            )
             .chain(currently_blocked.clone())
-            .collect::<IndexSet<_>>();
+            .collect::<IndexMap<_, _>>();
+
+        let block_relays = block.keys().cloned().collect();
         let read = lists
             .pop()
             .context("read")?
             .unwrap_or_default()
             .into_iter()
             .collect::<IndexSet<_>>()
-            .sub(&block);
+            .sub(&block_relays);
         let read_write = lists
             .pop()
             .context("read_write")?
             .unwrap_or_default()
             .into_iter()
             .collect::<IndexSet<_>>()
-            .sub(&block)
+            .sub(&block_relays)
             .sub(&read);
 
         let author_to_relays =
-            Self::fetch_gossip_relays(relays, &block, mode, seen_pubkeys, old_gossip).await?;
+            Self::fetch_gossip_relays(relays, &block_relays, mode, seen_pubkeys, old_gossip)
+                .await?;
 
         let outdated = relays
             .client_relays()
             .await
-            .sub(&currently_blocked)
+            .sub(&currently_blocked.keys().cloned().collect::<IndexSet<_>>())
             .sub(&read_write)
             .sub(&read)
             .sub(
@@ -262,7 +279,7 @@ impl RelayLists {
     pub(crate) fn contains(&self, url: &RelayUrl) -> bool {
         self.read_write.contains(url)
             || self.read.contains(url)
-            || self.block.contains(url)
+            || self.block.contains_key(url)
             || self.author_to_relays.values().any(|i| i.contains(url))
     }
 }

@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use lru::LruCache;
 use nostr::{
     Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, TagStandard, Timestamp,
@@ -246,7 +246,7 @@ impl Relays {
         Ok(())
     }
 
-    async fn reconnect(&self, blocked_relays: IndexSet<RelayUrl>) {
+    async fn reconnect(&self, blocked_relays: IndexMap<RelayUrl, Duration>) {
         log::info!("connecting");
         let start = Instant::now();
         self.nostr_client
@@ -262,7 +262,7 @@ impl Relays {
             .count();
 
         let blocked_relays = blocked_relays
-            .iter()
+            .keys()
             .map(|i| i.to_string())
             .collect::<Vec<_>>();
         log::info!(

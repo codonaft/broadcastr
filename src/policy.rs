@@ -1,4 +1,4 @@
-use crate::{Broadcastr, UPDATE_INTERVAL, relay_lists::RelayLists};
+use crate::{Broadcastr, UPDATE_INTERVAL, now, relay_lists::RelayLists};
 use anyhow as ah;
 use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DefaultKeyedStateStore};
 use indexmap::IndexSet;
@@ -75,13 +75,12 @@ impl Policy {
     }
 
     pub(crate) async fn block_relay(&self, relay_url: &RelayUrl) {
-        // TODO: ttl cache?
         self.inner
             .relay_lists
             .write()
             .await
             .block
-            .insert(relay_url.clone());
+            .insert(relay_url.clone(), now());
     }
 
     pub(crate) async fn read_write_for(&self, pubkeys: &HashSet<PublicKey>) -> IndexSet<RelayUrl> {
@@ -178,7 +177,7 @@ impl InnerPolicy {
     }
 
     async fn check_relay(&self, url: &RelayUrl) -> Result<AdmitStatus, PolicyError> {
-        let blocked = { self.relay_lists.read().await.block.contains(url) };
+        let blocked = { self.relay_lists.read().await.block.contains_key(url) };
         let result = if blocked {
             AdmitStatus::Rejected {
                 reason: Some("relay from block-list".to_string()),
