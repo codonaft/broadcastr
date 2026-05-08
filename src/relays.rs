@@ -204,18 +204,18 @@ impl Relays {
                     let connected = client_relays
                         .iter()
                         .filter(|(_, i)| i.status().is_connected());
-                    let preempted = offline
+                    let evicted = offline
                         .chain(connected)
                         .map(|(i, _)| i)
                         .filter(|i| !gossip.contains(*i) && !read.contains(*i))
                         .take(missing_pool_size)
                         .collect::<IndexSet<_>>();
-                    for i in &preempted {
+                    for i in &evicted {
                         self.remove_relay(i).await;
                     }
                     log::info!(
-                        "preempted {} of {missing_pool_size} missing relays for new gossip relays",
-                        preempted.len()
+                        "evicted {} of {missing_pool_size} missing relays for new gossip relays",
+                        evicted.len()
                     );
                 }
             }

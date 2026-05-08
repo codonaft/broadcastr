@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-gossip-discovery] [--no-nip66-discovery] [--no-nip11-requests] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--block-ttl <block-ttl>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-protect] [--no-gossip-discovery] [--no-nip66-discovery] [--no-nip11-requests] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -55,6 +55,8 @@ Options:
                     entries
   --block-relays    same, but for ignored relays; put public URL to your
                     broadcastr here to avoid loops
+  --block-ttl       store automatically blocked relays for given amount (default
+                    is 2h)
   --kinds           allow some event kinds only (comma-separated allow-list, e.g
                     "0,1,3,5,6,7,4550,34550")
   --pubkeys         allow authors or mentioned authors only (comma-separated
@@ -62,6 +64,8 @@ Options:
   --no-mentions     disallow mentions (of the allowed authors) by others
   --subscribe       subscribe and automatically distribute events (of the
                     allowed authors and kinds)
+  --no-protect      ignore NIP-70 protection tag for the automatically
+                    distributed events
   --no-gossip-discovery
                     don't discover additional relays from user profiles
   --no-nip66-discovery

@@ -185,15 +185,15 @@ async fn main() -> ah::Result<()> {
     }
 
     if args.subscribe && (args.pubkeys.is_none() || args.kinds.is_none()) {
-        ah::bail!("--pubkeys and --kinds required for --subscribe");
+        ah::bail!("--subscribe requires --pubkeys and --kinds");
     }
 
     if !args.subscribe && args.no_protect {
-        ah::bail!("--subscribe required for --no-protect");
+        ah::bail!("--no-protect requires --subscribe");
     }
 
     if args.no_gossip_discovery && args.no_nip66_discovery && args.relays.is_none() {
-        ah::bail!("--relays required when relay discovery disabled");
+        ah::bail!("--no-gossip-discovery and --no-nip66-discovery require --relays");
     }
 
     if args.update_interval.0 < args.connect_timeout.0 + args.request_timeout.0 {
@@ -201,7 +201,7 @@ async fn main() -> ah::Result<()> {
     }
 
     if args.no_mentions && args.pubkeys.is_none() {
-        ah::bail!("--pubkeys required for --no-mentions");
+        ah::bail!("--no-mentions requires --pubkeys");
     }
 
     if let Some(max_relays) = args.max_relays
