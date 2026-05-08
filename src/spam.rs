@@ -1,5 +1,4 @@
-use super::{Broadcastr, retry_with_backoff_endless};
-use crate::proxied_client_builder;
+use crate::{Broadcastr, proxied_client_builder, retry_with_backoff_endless};
 use anyhow as ah;
 use backoff::{self as bf};
 use nostr::PublicKey;

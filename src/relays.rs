@@ -1,10 +1,10 @@
-use super::{Broadcastr, retry_with_backoff_endless};
 use crate::{
-    Policy,
+    Broadcastr, Policy, is_onion_relay,
     nostr_utils::has_publish_limitation,
     policy::InnerPolicy,
     proxied_client_builder,
     relay_lists::{MAX_GOSSIP_RELAYS_PER_USER, MAX_SEEN_AUTHORS, RelayLists},
+    retry_with_backoff_endless,
 };
 use anyhow::{self as ah, Context};
 use futures::{StreamExt, future::join_all};
@@ -214,7 +214,7 @@ impl Relays {
                         self.remove_relay(i).await;
                     }
                     log::info!(
-                        "evicted {} of {missing_pool_size} missing relays for new gossip relays",
+                        "evicted {} relays for {missing_pool_size} gossip relays",
                         evicted.len()
                     );
                 }
@@ -345,26 +345,33 @@ impl Relays {
         let mut free_pool_entries = if let Some(max) = this.args.max_relays {
             max.get().saturating_sub(client_relays.len())
         } else {
-            0
+            usize::MAX
         };
 
         if free_pool_entries > 0 {
-            let restorable_relays = {
-                this.facts
-                    .read()
+            let restored = this
+                .facts
+                .read()
+                .await
+                .found_relevant_event
+                .iter()
+                .map(|(i, _)| i)
+                .filter(|&i| !client_relays.contains(i))
+                .take(free_pool_entries)
+                .cloned()
+                .collect::<IndexSet<RelayUrl>>();
+
+            log::info!("restored {} relays", restored.len());
+
+            free_pool_entries = free_pool_entries.saturating_sub(restored.len());
+
+            {
+                this.policy
+                    .relay_lists()
+                    .write()
                     .await
-                    .found_relevant_event
-                    .iter()
-                    .map(|(i, _)| i)
-                    .filter(|&i| !client_relays.contains(i))
-                    .take(free_pool_entries)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            };
-            for url in restorable_relays {
-                log::info!("restoring relay {url}");
-                this.add_relay(&url).await;
-                free_pool_entries -= 1;
+                    .read_write
+                    .extend(restored);
             }
         }
 
@@ -392,9 +399,11 @@ impl Relays {
                         .custom_tag(RELAY_NETWORK_TYPE, "clearnet"),
                 ];
 
-                if this.args.tor_proxy.is_some() || this.args.proxy.is_some() {
+                if this.may_connect_to_tor() {
                     filters.push(filter.custom_tag(RELAY_NETWORK_TYPE, "tor"));
                 }
+
+                log::info!("filters={filters:?}");
 
                 let mut stream = this
                     .nostr_client
@@ -404,8 +413,8 @@ impl Relays {
                     .await
                     .context("relay_discovery")?;
 
-                let mut discovered = HashSet::<RelayUrl>::default();
-                let mut discovered_non_bot_friendly = HashSet::<RelayUrl>::default();
+                let mut discovered = IndexSet::<RelayUrl>::default();
+                let mut discovered_bot_unfriendly = IndexSet::<RelayUrl>::default();
                 let relay_lists: RelayLists = { this.policy.relay_lists().read().await.clone() };
                 while let Some((_, stream_event)) = stream.next().await {
                     if let Ok(event) = stream_event
@@ -413,41 +422,45 @@ impl Relays {
                         && !this.args.no_nip66_discovery
                         && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
                         && !relay_lists.contains(&url)
+                        && (this.may_connect_to_tor() || !is_onion_relay(&url))
                     {
                         if event
                             .tags
                             .filter(LABEL)
-                            .any(|t| t.as_slice() == ["CLOUDFLARENET", "host.asn"])
+                            .any(|t| t.as_slice() == ["l", "CLOUDFLARENET", "host.asn"])
                         {
-                            discovered_non_bot_friendly.insert(url);
+                            // TODO: works?
+                            discovered_bot_unfriendly.insert(url);
                         } else {
-                            log::info!("discovered relay {url}");
-                            this.add_relay(&url).await;
                             discovered.insert(url);
-                        }
-
-                        free_pool_entries -= 1;
-                        if free_pool_entries == 0 {
-                            break;
+                            free_pool_entries -= 1;
+                            if free_pool_entries == 0 {
+                                break;
+                            }
                         }
                     }
                 }
 
-                for url in &discovered_non_bot_friendly {
-                    log::info!("discovered non-bot-friendly relay {url}"); // TODO
-                    this.add_relay(url).await;
-                    free_pool_entries -= 1;
-                    if free_pool_entries == 0 {
-                        break;
-                    }
-                }
+                discovered_bot_unfriendly = discovered_bot_unfriendly
+                    .into_iter()
+                    .take(free_pool_entries)
+                    .collect();
 
-                let discovered = discovered.len();
-                let non_bot_friendly = discovered_non_bot_friendly.len();
                 log::info!(
-                    "discovered {discovered} new relays + {non_bot_friendly} non-bot friendly \
-                     relays"
+                    "discovered {} new relays + {} bot-unfriendly relays",
+                    discovered.len(),
+                    discovered_bot_unfriendly.len()
                 );
+
+                {
+                    let lists = this.policy.relay_lists();
+                    lists
+                        .write()
+                        .await
+                        .read_write
+                        .extend(discovered.into_iter().chain(discovered_bot_unfriendly));
+                };
+
                 Ok::<_, ah::Error>(())
             }));
         }
@@ -837,6 +850,10 @@ impl Relays {
             .filter(|i| i.status() == RelayStatus::Banned)
             .map(|i| i.url().clone())
             .collect()
+    }
+
+    pub(crate) fn may_connect_to_tor(&self) -> bool {
+        self.args.tor_proxy.is_some() || self.args.proxy.is_some()
     }
 }
 

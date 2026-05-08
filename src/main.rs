@@ -17,7 +17,11 @@ use git_version::git_version;
 use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::{JsonUtil, nips::nip11::RelayInformationDocument, types::Timestamp};
+use nostr::{
+    JsonUtil,
+    nips::nip11::RelayInformationDocument,
+    types::{RelayUrl, Timestamp},
+};
 use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
@@ -397,9 +401,7 @@ fn proxied_client_builder(args: &Broadcastr) -> ah::Result<ClientBuilder> {
         client.proxy(Proxy::all(socks5(proxy)).map_err(ah::Error::from)?)
     } else if let Some(tor_proxy) = args.tor_proxy {
         client.proxy(Proxy::custom(move |url| {
-            if let Some(domain) = url.domain()
-                && domain.ends_with(".onion")
-            {
+            if url.domain().map(is_onion).unwrap_or_default() {
                 Some(socks5(tor_proxy))
             } else {
                 None
@@ -428,6 +430,14 @@ where
 
 fn now() -> Duration {
     Duration::from_secs(Timestamp::now().as_secs())
+}
+
+fn is_onion(url: &str) -> bool {
+    url.ends_with(".onion")
+}
+
+fn is_onion_relay(url: &RelayUrl) -> bool {
+    url.domain().map(is_onion).unwrap_or_default()
 }
 
 impl FromStr for Urls {

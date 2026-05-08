@@ -1,6 +1,5 @@
-use super::Broadcastr;
 use crate::{
-    now, proxied_client_builder,
+    Broadcastr, is_onion_relay, now, proxied_client_builder,
     relays::{RelayListCreatedAt, Relays, UpdateMode},
 };
 use anyhow::{self as ah, Context};
@@ -37,12 +36,29 @@ impl RelayLists {
         mode: UpdateMode,
         seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
     ) -> ah::Result<Self> {
+        let now = now();
+        let old = {
+            // TODO: relay list is now connected to the instance of relay list. make it static?
+            let lists = relays.policy.relay_lists();
+            let lists = lists.read().await;
+            let block = lists
+                .block
+                .iter()
+                .filter(|(_, created)| now.saturating_sub(**created) < relays.args.block_ttl.0)
+                .map(|(url, created)| (url.clone(), *created))
+                .collect::<IndexMap<RelayUrl, Duration>>();
+            Self {
+                block,
+                ..(lists.clone())
+            }
+        };
+
         let args = &relays.args;
         let futures = [&args.relays, &args.read_relays, &args.block_relays]
             .into_iter()
             .map(async |list| {
                 if let Some(list) = list {
-                    Self::fetch_and_parse(&list.0, args)
+                    Self::fetch_and_parse(relays, &list.0, args)
                         .await
                         .inspect_err(|e| log::error!("fetch_and_parse {list:?}: {e:?}"))
                 } else {
@@ -53,19 +69,6 @@ impl RelayLists {
             .await
             .into_iter()
             .collect::<Vec<ah::Result<IndexSet<_>>>>();
-
-        let now = now();
-        let (old_gossip, currently_blocked) = {
-            let lists = relays.policy.relay_lists();
-            let lists = lists.read().await;
-            let block = lists
-                .block
-                .iter()
-                .filter(|(_, created)| now.saturating_sub(**created) < relays.args.block_ttl.0)
-                .map(|(url, created)| (url.clone(), *created))
-                .collect::<IndexMap<RelayUrl, Duration>>();
-            (lists.author_to_relays.clone(), block)
-        };
 
         let block = lists
             .pop()
@@ -80,7 +83,7 @@ impl RelayLists {
                     .into_iter()
                     .map(|i| (i, now)),
             )
-            .chain(currently_blocked.clone())
+            .chain(old.block.clone())
             .collect::<IndexMap<_, _>>();
 
         let block_relays = block.keys().cloned().collect();
@@ -88,26 +91,33 @@ impl RelayLists {
             .pop()
             .context("read")?
             .unwrap_or_default()
-            .into_iter()
-            .collect::<IndexSet<_>>()
+            .union(&old.read)
+            .cloned()
+            .collect::<IndexSet<RelayUrl>>()
             .sub(&block_relays);
         let read_write = lists
             .pop()
             .context("read_write")?
             .unwrap_or_default()
-            .into_iter()
-            .collect::<IndexSet<_>>()
+            .union(&old.read_write)
+            .cloned()
+            .collect::<IndexSet<RelayUrl>>()
             .sub(&block_relays)
             .sub(&read);
 
-        let author_to_relays =
-            Self::fetch_gossip_relays(relays, &block_relays, mode, seen_pubkeys, old_gossip)
-                .await?;
+        let author_to_relays = Self::fetch_gossip_relays(
+            relays,
+            &block_relays,
+            mode,
+            seen_pubkeys,
+            old.author_to_relays,
+        )
+        .await?;
 
         let outdated = relays
             .client_relays()
             .await
-            .sub(&currently_blocked.keys().cloned().collect::<IndexSet<_>>())
+            .sub(&block.keys().cloned().collect::<IndexSet<_>>())
             .sub(&read_write)
             .sub(&read)
             .sub(
@@ -138,7 +148,6 @@ impl RelayLists {
         }
 
         let cached_gossip = if mode == UpdateMode::PartialGossipUpdate {
-            // TODO: relay list is now connected to the instance of relay list. make it static?
             Some(old_gossip.clone())
         } else {
             None
@@ -189,7 +198,7 @@ impl RelayLists {
 
         for event in relays
             .nostr_client
-            .fetch_events(filter.clone()) // TODO
+            .fetch_events(filter.clone())
             .timeout(relays.args.request_timeout.0)
             .await
             .context("fetch gossip")?
@@ -242,6 +251,7 @@ impl RelayLists {
     }
 
     async fn fetch_and_parse(
+        relays: &Relays,
         relays_or_relays_lists: &IndexSet<Url>,
         args: &Broadcastr,
     ) -> ah::Result<IndexSet<RelayUrl>> {
@@ -265,7 +275,8 @@ impl RelayLists {
                 } else {
                     ah::bail!("unexpected relay item {uri}");
                 }
-                .into_iter();
+                .into_iter()
+                .filter(|uri| relays.may_connect_to_tor() || !is_onion_relay(uri));
                 Ok(result)
             });
         let result = try_join_all(futures)
