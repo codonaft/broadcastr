@@ -82,6 +82,10 @@ struct Broadcastr {
     #[argh(switch)]
     subscribe: bool,
 
+    /// ignore NIP-70 protection tag for the automatically distributed events
+    #[argh(switch)]
+    no_protect: bool,
+
     /// don't discover additional relays from user profiles
     #[argh(switch)]
     no_gossip_discovery: bool,
@@ -182,6 +186,10 @@ async fn main() -> ah::Result<()> {
 
     if args.subscribe && (args.pubkeys.is_none() || args.kinds.is_none()) {
         ah::bail!("--pubkeys and --kinds required for --subscribe");
+    }
+
+    if !args.subscribe && args.no_protect {
+        ah::bail!("--subscribe required for --no-protect");
     }
 
     if args.no_gossip_discovery && args.no_nip66_discovery && args.relays.is_none() {

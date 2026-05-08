@@ -312,14 +312,24 @@ impl Relays {
                                 .any(|i| i.match_event(&event, MatchEventOptions::default()))
                             {
                                 let event_id = event.id;
-                                log::info!("received event {event_id} from subscription");
-                                let _ = Self::spawn_handle_event(
-                                    this.clone(),
-                                    event,
-                                    None,
-                                    IndexSet::from([stream_relay_url]),
-                                )
-                                .await;
+                                let is_protected = !this.args.no_protect && event.is_protected();
+                                let protection = if is_protected {
+                                    ", ignoring it due to NIP-70 protection tag"
+                                } else {
+                                    ""
+                                };
+                                log::info!(
+                                    "received event {event_id} from subscription{protection}"
+                                );
+                                if !is_protected {
+                                    let _ = Self::spawn_handle_event(
+                                        this.clone(),
+                                        event,
+                                        None,
+                                        IndexSet::from([stream_relay_url]),
+                                    )
+                                    .await;
+                                }
                             }
                         },
                         Err(e) => {
