@@ -42,7 +42,7 @@ broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.jso
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--block-ttl <block-ttl>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-protect] [--no-gossip-discovery] [--no-nip66-discovery] [--no-nip11-requests] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--block-ttl <block-ttl>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-protect] [--no-gossip-discovery] [--no-nip66-discovery] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -70,9 +70,6 @@ Options:
                     don't discover additional relays from user profiles
   --no-nip66-discovery
                     don't discover additional relays using NIP-66
-  --no-nip11-requests
-                    consume less resources but block possibly failing relays
-                    more aggressively
   --no-azzamo       don't use azzamo.net for spam filtering
   --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
                     "127.0.0.1:9050")
@@ -138,6 +135,8 @@ Options:
 - ~~login to NIP-42 relays?~~
   - does it make sense transmitting someone else's events from a generated `nsec`?
 - [ ] endpoint that returns a healthy relays list?
+- [ ] option to ignore TLS issues?
+    - disallow for NIP-59 and NIP-70?
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.
