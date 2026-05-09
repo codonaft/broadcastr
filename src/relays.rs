@@ -403,16 +403,24 @@ impl Relays {
                     .custom_tag(RELAY_CAPABILITY, "!auth")
                     .custom_tag(RELAY_CAPABILITY, "!payment");
 
-                let mut filters = vec![
-                    filter.clone().custom_tag(RELAY_NETWORK_TYPE, "clearnet"),
-                    filter
-                        .clone()
-                        .custom_tag(RELAY_CAPABILITY, "ssl")
-                        .custom_tag(RELAY_NETWORK_TYPE, "clearnet"),
-                ];
+                let clearnet = filter.clone().custom_tag(RELAY_NETWORK_TYPE, "clearnet");
+                let ssl = clearnet.clone().custom_tag(RELAY_CAPABILITY, "ssl");
+                let mut filters = vec![clearnet.clone(), ssl.clone()];
+
+                let min_pow = this.args.min_pow.unwrap_or_default();
+                if min_pow == 0 {
+                    filters.extend([
+                        clearnet.custom_tag(RELAY_NETWORK_TYPE, "!pow"),
+                        ssl.custom_tag(RELAY_NETWORK_TYPE, "!pow"),
+                    ]);
+                }
 
                 if this.maybe_can_connect_to_tor() {
-                    filters.push(filter.custom_tag(RELAY_NETWORK_TYPE, "tor"));
+                    let tor = filter.custom_tag(RELAY_NETWORK_TYPE, "tor");
+                    filters.push(tor.clone());
+                    if min_pow == 0 {
+                        filters.push(tor.custom_tag(RELAY_NETWORK_TYPE, "!pow"));
+                    }
                 }
 
                 log::info!("filters={filters:?}");
