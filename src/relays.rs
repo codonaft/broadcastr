@@ -405,7 +405,8 @@ impl Relays {
                 log::debug!("discovering relays");
                 let filter = this
                     .filter_in_update_interval_with_age(match mode {
-                        UpdateMode::InitializeRelays | UpdateMode::FirstFullUpdate => WEEK_SECS,
+                        UpdateMode::InitializeRelays => 2 * WEEK_SECS,
+                        UpdateMode::FirstFullUpdate => WEEK_SECS,
                         _ => 0,
                     })
                     .kind(EventKind::RelayDiscovery)
