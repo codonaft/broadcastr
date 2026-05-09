@@ -454,12 +454,12 @@ impl Relays {
                         && !relay_lists.contains(&url)
                         && (this.maybe_can_connect_to_tor() || !is_onion_relay(&url))
                     {
-                        if event
-                            .tags
-                            .filter(LABEL)
-                            .any(|t| t.as_slice() == ["l", "CLOUDFLARENET", "host.asn"])
-                        {
-                            // TODO: works?
+                        if event.tags.filter(LABEL).any(|t| {
+                            t.as_slice()
+                                .get(1)
+                                .map(|t| t.to_lowercase().contains("cloudflare"))
+                                .unwrap_or_default()
+                        }) {
                             discovered_bot_unfriendly.insert(url);
                         } else {
                             discovered.insert(url);
