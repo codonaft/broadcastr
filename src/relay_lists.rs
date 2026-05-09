@@ -32,6 +32,11 @@ pub(crate) struct RelayLists {
     pub relay_to_kinds: IndexMap<RelayUrl, IndexSet<EventKind>>,
 }
 
+struct ParsedUrlFragments {
+    relay_to_kinds: IndexMap<RelayUrl, IndexSet<EventKind>>,
+    lists: Vec<ah::Result<IndexSet<RelayUrl>>>,
+}
+
 impl RelayLists {
     pub(crate) async fn new(
         relays: &Relays,
@@ -67,42 +72,31 @@ impl RelayLists {
                     Ok(Default::default())
                 }
             });
-        let lists_dirty = join_all(futures)
+        let raw_lists = join_all(futures)
             .await
             .into_iter()
             .collect::<Vec<ah::Result<Vec<_>>>>();
 
-        let mut relay_to_kinds: IndexMap<RelayUrl, IndexSet<EventKind>> = IndexMap::default();
-        let mut lists: Vec<ah::Result<IndexSet<RelayUrl>>> = vec![];
-        for i in lists_dirty {
-            match i {
-                Ok(list) => {
-                    let mut new_list = IndexSet::default();
-                    for mut url in list {
-                        let relay_url = if let Some(fragment) = url.fragment()
-                            && let Some((_, kinds)) = fragment.split_once("k=")
-                        {
-                            let kinds = kinds
-                                .split('+')
-                                .map(EventKind::from_str)
-                                .collect::<Result<_, _>>()
-                                .map_err(ah::Error::from)?;
+        let ParsedUrlFragments {
+            relay_to_kinds,
+            mut lists,
+        } = ParsedUrlFragments::parse(raw_lists)?;
 
-                            url.set_fragment(None);
-                            let relay_url = url.as_str().parse::<RelayUrl>()?;
-                            relay_to_kinds.entry(relay_url.clone()).or_insert(kinds);
-                            relay_url
-                        } else {
-                            url.as_str().parse::<RelayUrl>()?
-                        };
-                        new_list.insert(relay_url);
-                    }
-                    lists.push(Ok(new_list));
-                },
-                Err(e) => {
-                    lists.push(Err(e));
-                },
-            }
+        let relays_with_unmatched_allowed_kinds = if let Some(allowed_kinds) = &relays.args.kinds {
+            relay_to_kinds
+                .iter()
+                .filter(|(_, kinds)| kinds.is_disjoint(&allowed_kinds.0))
+                .map(|(i, _)| i.clone())
+                .collect()
+        } else {
+            IndexSet::<RelayUrl>::default()
+        };
+
+        if !relays_with_unmatched_allowed_kinds.is_empty() {
+            log::debug!(
+                "ignoring relays with non-intersecting allowed kinds: \
+                 {relays_with_unmatched_allowed_kinds:?}"
+            );
         }
 
         let block = lists
@@ -129,7 +123,8 @@ impl RelayLists {
             .union(&old.read)
             .cloned()
             .collect::<IndexSet<RelayUrl>>()
-            .sub(&block_relays);
+            .sub(&block_relays)
+            .sub(&relays_with_unmatched_allowed_kinds);
         let read_write = lists
             .pop()
             .context("read_write")?
@@ -138,7 +133,8 @@ impl RelayLists {
             .cloned()
             .collect::<IndexSet<RelayUrl>>()
             .sub(&block_relays)
-            .sub(&read);
+            .sub(&read)
+            .sub(&relays_with_unmatched_allowed_kinds);
 
         let author_to_relays = Self::fetch_gossip_relays(
             relays,
@@ -161,8 +157,6 @@ impl RelayLists {
                     .flat_map(|i| i.iter().cloned())
                     .collect::<IndexSet<_>>(),
             );
-
-        log::debug!("per relay allow-list: {relay_to_kinds:?}");
 
         Ok(Self {
             read_write,
@@ -330,5 +324,52 @@ impl RelayLists {
             || self.read.contains(url)
             || self.block.contains_key(url)
             || self.author_to_relays.values().any(|i| i.contains(url))
+    }
+}
+
+impl ParsedUrlFragments {
+    fn parse(lists_dirty: Vec<ah::Result<Vec<Url>>>) -> ah::Result<Self> {
+        let mut relay_to_kinds: IndexMap<RelayUrl, IndexSet<EventKind>> = IndexMap::default();
+        let mut lists: Vec<ah::Result<IndexSet<RelayUrl>>> = vec![];
+
+        for i in lists_dirty {
+            match i {
+                Ok(list) => {
+                    let mut new_list = IndexSet::default();
+                    for mut url in list {
+                        let relay_url = if let Some(fragment) = url.fragment()
+                            && let Some((_, kinds)) = fragment.split_once("k=")
+                        {
+                            let kinds = kinds
+                                .split('+')
+                                .map(EventKind::from_str)
+                                .collect::<Result<IndexSet<_>, _>>()
+                                .map_err(ah::Error::from)?;
+
+                            url.set_fragment(None);
+
+                            let relay_url = url.as_str().parse::<RelayUrl>()?;
+                            if !kinds.is_empty() {
+                                relay_to_kinds.entry(relay_url.clone()).or_insert(kinds);
+                            }
+                            relay_url
+                        } else {
+                            url.as_str().parse::<RelayUrl>()?
+                        };
+                        new_list.insert(relay_url);
+                    }
+                    lists.push(Ok(new_list));
+                },
+                Err(e) => {
+                    lists.push(Err(e));
+                },
+            }
+        }
+
+        log::debug!("per relay allow-list: {relay_to_kinds:?}");
+        Ok(Self {
+            relay_to_kinds,
+            lists,
+        })
     }
 }
