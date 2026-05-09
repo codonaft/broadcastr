@@ -101,41 +101,57 @@ struct QueryEvent {
 }
 
 impl Relays {
-    pub(crate) async fn init(this: Arc<Self>) {
-        let _ = Self::step(this.clone(), UpdateMode::InitializeRelays).await;
-        let _ = Self::step(this, UpdateMode::InitializeGossip).await;
-    }
-
     pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
+        {
+            let seen_pubkeys = this.seen_pubkeys.clone();
+            let seen_pubkeys = seen_pubkeys.lock().await;
+
+            let this = this.clone();
+            let mut seen_pubkeys = seen_pubkeys.clone();
+            for mode in [UpdateMode::InitializeRelays, UpdateMode::InitializeGossip] {
+                Self::maybe_init(this.clone(), mode, &mut seen_pubkeys).await?;
+                // TODO: backoff
+            }
+        }
+
+        let mode = UpdateMode::FullUpdate;
+        let timeout = this.args.update_interval.0;
         let mut interval = time::interval(this.args.update_interval.0);
         loop {
             interval.tick().await;
             retry_with_backoff_endless(this.args.clone(), || {
                 let this = this.clone();
-                async move { Ok(Self::step(this, UpdateMode::FullUpdate).await?) }
+                async move {
+                    {
+                        let seen_pubkeys = this.seen_pubkeys.clone();
+                        let mut seen_pubkeys = seen_pubkeys.lock().await;
+
+                        if let Err(e) = this.update_relays(mode, &mut seen_pubkeys).await {
+                            log::error!("failed to update relays: {e}");
+                        }
+                    }
+
+                    Self::update_subscriptions(this, mode, timeout).await?;
+                    Ok(())
+                }
             })
             .await?;
         }
     }
 
-    async fn step(this: Arc<Self>, mode: UpdateMode) -> ah::Result<()> {
-        if this.args.no_gossip_discovery
-            && (mode == UpdateMode::InitializeGossip || mode == UpdateMode::PartialGossipUpdate)
-        {
+    async fn maybe_init(
+        this: Arc<Self>,
+        mode: UpdateMode,
+        seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
+    ) -> ah::Result<()> {
+        if !this.args.no_gossip_discovery && mode == UpdateMode::InitializeGossip {
             return Ok(());
         }
 
-        {
-            let seen_pubkeys = this.seen_pubkeys.clone();
-            let mut seen_pubkeys = seen_pubkeys.lock().await;
-
-            if let Err(e) = this.update_relays(mode, &mut seen_pubkeys).await {
-                log::error!("failed to update relays: {e}");
-            }
+        if let Err(e) = this.update_relays(mode, seen_pubkeys).await {
+            log::error!("failed to update relays: {e}");
         }
-
-        Self::update_subscriptions(this, mode).await?;
-        Ok(())
+        Self::update_subscriptions(this, mode, WARMUP).await
     }
 
     async fn update_relays(
@@ -274,14 +290,12 @@ impl Relays {
         log::debug!("reconnected in {elapsed}, blocked relays: {blocked_relays:?}");
     }
 
-    async fn update_subscriptions(this: Arc<Self>, mode: UpdateMode) -> ah::Result<()> {
+    async fn update_subscriptions(
+        this: Arc<Self>,
+        mode: UpdateMode,
+        timeout: Duration,
+    ) -> ah::Result<()> {
         let mut futures = vec![];
-        let timeout =
-            if mode == UpdateMode::InitializeRelays || mode == UpdateMode::InitializeGossip {
-                *humantime::Duration::from(WARMUP)
-            } else {
-                this.args.update_interval.0
-            };
         let policy = ReqExitPolicy::WaitDurationAfterEOSE(timeout);
 
         if (mode == UpdateMode::FullUpdate || mode == UpdateMode::PartialGossipUpdate)

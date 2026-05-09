@@ -271,8 +271,6 @@ async fn main() -> ah::Result<()> {
             s.start(SubsystemBuilder::new(
                 "main",
                 async move |subsys: &mut SubsystemHandle| {
-                    Relays::init(relays.clone()).await;
-
                     let listeners = new_listeners(&args).await?.into_iter().map({
                         let relays = relays.clone();
                         move |listener| serve(listener, ws_config, relays.clone()).boxed()
