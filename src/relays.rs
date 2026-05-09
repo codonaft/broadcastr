@@ -55,7 +55,7 @@ const FATAL_CONNECTION_ERRORS: [&str; 7] = [
 ];
 
 const WARMUP: Duration = Duration::from_secs(15);
-const WEEK_SECS: u64 = 7 * 24 * 60 * 60;
+const WEEK_SECS: u64 = 7 * Duration::from_hours(24).as_secs();
 
 const MAX_GOSSIP_RELAYS: NonZeroUsize = NonZeroUsize::new(MAX_GOSSIP_RELAYS_PER_USER)
     .unwrap()
@@ -137,7 +137,9 @@ impl Relays {
         mode: UpdateMode,
         seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
     ) -> ah::Result<()> {
-        if !this.args.no_gossip_discovery && mode == UpdateMode::InitializeGossip {
+        if let UpdateMode::InitializeGossip = mode
+            && !this.args.no_gossip_discovery
+        {
             return Ok(());
         }
 
@@ -305,9 +307,9 @@ impl Relays {
         let mut futures = vec![];
         let policy = ReqExitPolicy::WaitDurationAfterEOSE(timeout);
 
-        if (mode == UpdateMode::FirstFullUpdate
-            || mode == UpdateMode::FullUpdate
-            || mode == UpdateMode::PartialGossipUpdate)
+        if let UpdateMode::FirstFullUpdate
+        | UpdateMode::FullUpdate
+        | UpdateMode::PartialGossipUpdate = mode
             && this.args.subscribe
             && let (Some(pubkeys), Some(kinds)) =
                 (this.args.pubkeys.clone(), this.args.kinds.clone())
@@ -381,17 +383,17 @@ impl Relays {
                 .cloned()
                 .collect::<IndexSet<RelayUrl>>();
 
-            log::info!("restored {} relays", restored.len());
-
-            free_pool_entries = free_pool_entries.saturating_sub(restored.len());
-
-            {
-                this.policy
-                    .relay_lists()
-                    .write()
-                    .await
-                    .read_write
-                    .extend(restored);
+            if !restored.is_empty() {
+                log::info!("restored {} relays", restored.len());
+                free_pool_entries = free_pool_entries.saturating_sub(restored.len());
+                {
+                    this.policy
+                        .relay_lists()
+                        .write()
+                        .await
+                        .read_write
+                        .extend(restored);
+                }
             }
         }
 
@@ -402,15 +404,10 @@ impl Relays {
             futures.push(tokio::spawn(async move {
                 log::debug!("discovering relays");
                 let filter = this
-                    .filter_in_update_interval_with_age(
-                        if mode == UpdateMode::InitializeRelays
-                            || mode == UpdateMode::FirstFullUpdate
-                        {
-                            WEEK_SECS
-                        } else {
-                            0
-                        },
-                    )
+                    .filter_in_update_interval_with_age(match mode {
+                        UpdateMode::InitializeRelays | UpdateMode::FirstFullUpdate => WEEK_SECS,
+                        _ => 0,
+                    })
                     .kind(EventKind::RelayDiscovery)
                     .custom_tag(RELAY_CAPABILITY, "!auth")
                     .custom_tag(RELAY_CAPABILITY, "!payment");
@@ -483,8 +480,8 @@ impl Relays {
                 );
 
                 {
-                    let lists = this.policy.relay_lists();
-                    lists
+                    this.policy
+                        .relay_lists()
                         .write()
                         .await
                         .read_write
