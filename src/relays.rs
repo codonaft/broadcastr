@@ -102,7 +102,7 @@ struct QueryEvent {
 }
 
 impl Relays {
-    pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
+    pub(crate) async fn run(this: Arc<Self>) -> ah::Result<()> {
         {
             let mut seen_pubkeys = this.seen_pubkeys.lock().await;
             let mut intervals = backoff(&this.args).build();
@@ -328,23 +328,19 @@ impl Relays {
                                 .any(|i| i.match_event(&event, MatchEventOptions::default()))
                             {
                                 let event_id = event.id;
-                                let is_protected = !this.args.no_protect && event.is_protected();
-                                let protection = if is_protected {
-                                    ", ignoring it due to NIP-70 protection tag"
+                                let allow_protected = false;
+                                if let Err(e) = Self::spawn_handle_event(
+                                    this.clone(),
+                                    event,
+                                    None,
+                                    IndexSet::from([stream_relay_url]),
+                                    allow_protected,
+                                )
+                                .await
+                                {
+                                    log::debug!("ignored event {event_id} from subscription: {e}");
                                 } else {
-                                    ""
-                                };
-                                log::info!(
-                                    "received event {event_id} from subscription{protection}"
-                                );
-                                if !is_protected {
-                                    let _ = Self::spawn_handle_event(
-                                        this.clone(),
-                                        event,
-                                        None,
-                                        IndexSet::from([stream_relay_url]),
-                                    )
-                                    .await;
+                                    log::info!("accepted event {event_id} from subscription");
                                 }
                             }
                         },
@@ -497,12 +493,14 @@ impl Relays {
         event: Event,
         ip: Option<IpAddr>,
         found_on_relays: IndexSet<RelayUrl>,
+        allow_protected: bool,
     ) -> ah::Result<()> {
-        let result = this.policy.check(&event, ip).await;
-        if let Err(e) = &result {
+        this.policy.check(&event, ip).await?;
+
+        if !allow_protected && !this.args.no_protect && event.is_protected() {
             let event_id = event.id;
-            log::info!("event {event_id} not accepted: {e}");
-            return result;
+            log::info!("ignoring event {event_id} due to NIP-70 protection tag");
+            return Err(ah::anyhow!("protected"));
         }
 
         tokio::spawn(async move {

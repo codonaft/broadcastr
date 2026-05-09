@@ -280,8 +280,8 @@ async fn main() -> ah::Result<()> {
                                 ah::bail!(SHUTDOWN);
                             }
                             .boxed(),
-                            Relays::updater(relays).boxed(),
-                            spam::azzamo_updater(&args, azzamo_block_pubkeys_sender).boxed(),
+                            Relays::run(relays).boxed(),
+                            spam::run_azzamo(&args, azzamo_block_pubkeys_sender).boxed(),
                         ]
                         .into_iter()
                         .chain(listeners),
@@ -424,8 +424,8 @@ fn now() -> Duration {
     Duration::from_secs(Timestamp::now().as_secs())
 }
 
-fn is_onion(url: &str) -> bool {
-    url.ends_with(".onion")
+fn is_onion(domain: &str) -> bool {
+    domain.ends_with(".onion")
 }
 
 fn is_onion_relay(url: &RelayUrl) -> bool {

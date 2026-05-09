@@ -128,12 +128,24 @@ async fn handle_client_message(
         Event(event) => {
             let event = event.into_owned();
             let event_id = event.id;
-            log::info!("received event {event_id} from ws request");
-            let (success, message) =
-                match Relays::spawn_handle_event(relays, event, ip, Default::default()).await {
-                    Ok(()) => (true, "".to_string()),
-                    Err(e) => (false, format!("{e}")),
-                };
+            let allow_protected = true;
+            let (success, message) = match Relays::spawn_handle_event(
+                relays,
+                event,
+                ip,
+                Default::default(),
+                allow_protected,
+            )
+            .await
+            {
+                Ok(()) => (true, "".to_string()),
+                Err(e) => (false, format!("{e}")),
+            };
+            if success {
+                log::info!("accepted event {event_id} from ws request");
+            } else {
+                log::debug!("ignored event {event_id} from ws request: {message}");
+            }
             ok(event_id, success, &message, ws_sender).await;
         },
         Close(subscription_id) => closed(subscription_id, "close", ws_sender).await,

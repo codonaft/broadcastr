@@ -6,7 +6,7 @@ use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use tokio::{sync::watch, time};
 
-pub(crate) async fn azzamo_updater(
+pub(crate) async fn run_azzamo(
     args: &Broadcastr,
     spam_pubkeys_sender: watch::Sender<HashSet<PublicKey>>,
 ) -> ah::Result<()> {
