@@ -34,7 +34,7 @@ cargo install --locked --force --git https://github.com/codonaft/broadcastr
 
 ## Run
 ```
-broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json --read-relays wss://profiles.nostr1.com,wss://user.kindpag.es,wss://relay.vertexlab.io,wss://monitorlizard.nostr1.com,wss://relay.nostr.watch,wss://relaypag.es
+broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json --read-relays wss://monitorlizard.nostr1.com,wss://relay.nostr.watch,wss://relaypag.es
 ```
 
 <details>
@@ -49,8 +49,9 @@ Broadcast Nostr events to other relays
 Options:
   --listen          the listener ws URI (e.g. "ws://localhost:8080")
   --relays          relays or relay-list URIs in a descending order of priority
-                    (comma-separated, e.g.
-                    "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
+                    (comma-separated, optionally with per relay event kind
+                    allow-list, e.g.
+                    "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,wss://user.kindpag.es#k=0+3+10002,ws://1.2.3.4:5678")
   --read-relays     same, but for read-only relays; overrides the --relays
                     entries
   --block-relays    same, but for ignored relays; put public URL to your
@@ -137,6 +138,7 @@ Options:
 - [ ] endpoint that returns a healthy relays list?
 - [ ] option to ignore TLS issues?
     - disallow for NIP-59 and NIP-70?
+- [x] per relay event kind allow-list
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.

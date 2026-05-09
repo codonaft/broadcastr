@@ -83,7 +83,11 @@ impl Policy {
             .insert(relay_url.clone(), now());
     }
 
-    pub(crate) async fn read_write_for(&self, pubkeys: &HashSet<PublicKey>) -> IndexSet<RelayUrl> {
+    pub(crate) async fn read_write_for(
+        &self,
+        pubkeys: &HashSet<PublicKey>,
+        kind: EventKind,
+    ) -> IndexSet<RelayUrl> {
         let lists = self.inner.relay_lists.read().await;
         lists
             .read_write
@@ -95,6 +99,13 @@ impl Policy {
                     .filter(|(i, _)| pubkeys.contains(i))
                     .flat_map(|(_, i)| i.iter()),
             )
+            .filter(|i| {
+                lists
+                    .relay_to_kinds
+                    .get(*i)
+                    .map(|k| k.contains(&kind))
+                    .unwrap_or(true)
+            })
             .cloned()
             .collect()
     }

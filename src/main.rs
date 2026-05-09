@@ -17,7 +17,7 @@ use nonzero_ext::*;
 use nostr::{
     JsonUtil,
     nips::nip11::{Limitation, RelayInformationDocument},
-    types::{RelayUrl, Timestamp},
+    types::Timestamp,
 };
 use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
@@ -53,7 +53,8 @@ struct Broadcastr {
     listen: Url,
 
     /// relays or relay-list URIs in a descending order of priority
-    /// (comma-separated, e.g. "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,ws://1.2.3.4:5678")
+    /// (comma-separated, optionally with per relay event kind allow-list,
+    /// e.g. "https://codonaft.com/relays.json,file:///path/to/relays-in-array.json,wss://user.kindpag.es#k=0+3+10002,ws://1.2.3.4:5678")
     #[argh(option)]
     relays: Option<Urls>,
 
@@ -400,7 +401,7 @@ fn proxied_client_builder(args: &Broadcastr) -> ah::Result<ClientBuilder> {
         client.proxy(Proxy::all(socks5(proxy)).map_err(ah::Error::from)?)
     } else if let Some(tor_proxy) = args.tor_proxy {
         client.proxy(Proxy::custom(move |url| {
-            if url.domain().map(is_onion).unwrap_or_default() {
+            if is_onion(url) {
                 Some(socks5(tor_proxy))
             } else {
                 None
@@ -424,12 +425,8 @@ fn now() -> Duration {
     Duration::from_secs(Timestamp::now().as_secs())
 }
 
-fn is_onion(domain: &str) -> bool {
-    domain.ends_with(".onion")
-}
-
-fn is_onion_relay(url: &RelayUrl) -> bool {
-    url.domain().map(is_onion).unwrap_or_default()
+fn is_onion(url: &Url) -> bool {
+    url.domain().is_some_and(|host| host.ends_with(".onion"))
 }
 
 impl FromStr for Urls {

@@ -1,8 +1,9 @@
 use crate::{
-    Broadcastr, is_onion_relay, now, proxied_client_builder,
+    Broadcastr, is_onion, now, proxied_client_builder,
     relays::{RelayListCreatedAt, Relays, UpdateMode},
 };
 use anyhow::{self as ah, Context};
+use core::str::FromStr;
 use futures::future::{join_all, try_join_all};
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
@@ -28,6 +29,7 @@ pub(crate) struct RelayLists {
     pub block: IndexMap<RelayUrl, Duration>,
     pub author_to_relays: IndexMap<PublicKey, IndexSet<RelayUrl>>,
     pub outdated: IndexSet<RelayUrl>,
+    pub relay_to_kinds: IndexMap<RelayUrl, IndexSet<EventKind>>,
 }
 
 impl RelayLists {
@@ -65,10 +67,43 @@ impl RelayLists {
                     Ok(Default::default())
                 }
             });
-        let mut lists = join_all(futures)
+        let lists_dirty = join_all(futures)
             .await
             .into_iter()
-            .collect::<Vec<ah::Result<IndexSet<_>>>>();
+            .collect::<Vec<ah::Result<Vec<_>>>>();
+
+        let mut relay_to_kinds: IndexMap<RelayUrl, IndexSet<EventKind>> = IndexMap::default();
+        let mut lists: Vec<ah::Result<IndexSet<RelayUrl>>> = vec![];
+        for i in lists_dirty {
+            match i {
+                Ok(list) => {
+                    let mut new_list = IndexSet::default();
+                    for mut url in list {
+                        let relay_url = if let Some(fragment) = url.fragment()
+                            && let Some((_, kinds)) = fragment.split_once("k=")
+                        {
+                            let kinds = kinds
+                                .split('+')
+                                .map(EventKind::from_str)
+                                .collect::<Result<_, _>>()
+                                .map_err(ah::Error::from)?;
+
+                            url.set_fragment(None);
+                            let relay_url = url.as_str().parse::<RelayUrl>()?;
+                            relay_to_kinds.entry(relay_url.clone()).or_insert(kinds);
+                            relay_url
+                        } else {
+                            url.as_str().parse::<RelayUrl>()?
+                        };
+                        new_list.insert(relay_url);
+                    }
+                    lists.push(Ok(new_list));
+                },
+                Err(e) => {
+                    lists.push(Err(e));
+                },
+            }
+        }
 
         let block = lists
             .pop()
@@ -127,12 +162,15 @@ impl RelayLists {
                     .collect::<IndexSet<_>>(),
             );
 
+        log::debug!("per relay allow-list: {relay_to_kinds:?}");
+
         Ok(Self {
             read_write,
             read,
             block,
             author_to_relays,
             outdated,
+            relay_to_kinds,
         })
     }
 
@@ -254,7 +292,7 @@ impl RelayLists {
         relays: &Relays,
         relays_or_relays_lists: &IndexSet<Url>,
         args: &Broadcastr,
-    ) -> ah::Result<IndexSet<RelayUrl>> {
+    ) -> ah::Result<Vec<Url>> {
         let futures = relays_or_relays_lists
             .iter()
             .map(async |uri| -> ah::Result<_> {
@@ -270,20 +308,20 @@ impl RelayLists {
                         .get(uri.as_ref())
                         .send()
                         .await?
-                        .json::<Vec<RelayUrl>>()
+                        .json::<Vec<Url>>()
                         .await?
                 } else {
                     ah::bail!("unexpected relay item {uri}");
                 }
                 .into_iter()
-                .filter(|uri| relays.maybe_can_connect_to_tor() || !is_onion_relay(uri));
+                .filter(|uri| relays.maybe_can_connect_to_tor() || !is_onion(uri));
                 Ok(result)
             });
         let result = try_join_all(futures)
             .await?
             .into_iter()
             .flatten()
-            .collect::<IndexSet<RelayUrl>>();
+            .collect::<Vec<Url>>();
         Ok(result)
     }
 

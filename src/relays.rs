@@ -1,5 +1,5 @@
 use crate::{
-    Broadcastr, Policy, backoff, is_onion_relay,
+    Broadcastr, Policy, backoff,
     nostr_utils::has_publish_limitation,
     policy::InnerPolicy,
     proxied_client_builder,
@@ -176,6 +176,7 @@ impl Relays {
             block,
             author_to_relays,
             outdated,
+            relay_to_kinds,
         } = RelayLists::new(self, mode, seen_pubkeys).await?;
 
         let current_relay_lists = self.policy.relay_lists();
@@ -192,6 +193,7 @@ impl Relays {
                 block: Default::default(),
                 author_to_relays,
                 outdated,
+                relay_to_kinds,
             };
             return Err(ah::anyhow!("all relays are blocked"));
             // add_relay may aquire read lock from policy
@@ -264,6 +266,7 @@ impl Relays {
                 block,
                 author_to_relays,
                 outdated,
+                relay_to_kinds,
             };
         }
 
@@ -450,7 +453,7 @@ impl Relays {
                         && !this.args.no_nip66_discovery
                         && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
                         && !relay_lists.contains(&url)
-                        && (this.maybe_can_connect_to_tor() || !is_onion_relay(&url))
+                        && (this.maybe_can_connect_to_tor() || !url.is_onion())
                     {
                         if event.tags.filter(LABEL).any(|t| {
                             t.as_slice()
@@ -960,7 +963,7 @@ impl QueryEvent {
         let args = &relays.args;
         let nostr_client = &relays.nostr_client;
         let event_id = event.id;
-        let read_write = relays.policy.read_write_for(pubkeys).await;
+        let read_write = relays.policy.read_write_for(pubkeys, event.kind).await;
         let found_on_relays = join_all(nostr_client.relays().await.into_iter().map(
             |(relay_url, relay)| {
                 let read_write = read_write.clone();
@@ -1000,7 +1003,7 @@ impl QueryEvent {
         .collect::<IndexSet<RelayUrl>>();
 
         // some relays were possibly banned and removed, retrieving them again
-        let relays_without_event = relays.client_relays().await.sub(&found_on_relays);
+        let relays_without_event = read_write.sub(&found_on_relays);
 
         Ok(Self {
             found_on_relays,
