@@ -92,6 +92,7 @@ pub(crate) enum UpdateMode {
     InitializeRelays,
     InitializeGossip,
     FullUpdate,
+    FirstFullUpdate,
     PartialGossipUpdate,
 }
 
@@ -115,25 +116,16 @@ impl Relays {
             }
         }
 
-        let mode = UpdateMode::FullUpdate;
-        let timeout = this.args.update_interval.0;
         let mut interval = time::interval(this.args.update_interval.0);
+        interval.tick().await;
+        let _ = Self::update(this.clone(), UpdateMode::FirstFullUpdate).await;
+
         loop {
             interval.tick().await;
 
             let attempt = || {
                 let this = this.clone();
-                async move {
-                    {
-                        let seen_pubkeys = this.seen_pubkeys.clone();
-                        let mut seen_pubkeys = seen_pubkeys.lock().await;
-
-                        if let Err(e) = this.update_relays(mode, &mut seen_pubkeys).await {
-                            log::error!("failed to update relays: {e}");
-                        }
-                    }
-                    Self::update_subscriptions(this, mode, timeout).await
-                }
+                async move { Self::update(this, UpdateMode::FullUpdate).await }
             };
 
             attempt.retry(backoff(&this.args)).await?;
@@ -153,6 +145,20 @@ impl Relays {
             log::error!("failed to update relays: {e}");
         }
         Self::update_subscriptions(this, mode, WARMUP).await
+    }
+
+    async fn update(this: Arc<Self>, mode: UpdateMode) -> ah::Result<()> {
+        {
+            let seen_pubkeys = this.seen_pubkeys.clone();
+            let mut seen_pubkeys = seen_pubkeys.lock().await;
+
+            if let Err(e) = this.update_relays(mode, &mut seen_pubkeys).await {
+                log::error!("failed to update relays: {e}");
+            }
+        }
+
+        let timeout = this.args.update_interval.0;
+        Self::update_subscriptions(this, mode, timeout).await
     }
 
     async fn update_relays(
@@ -299,7 +305,9 @@ impl Relays {
         let mut futures = vec![];
         let policy = ReqExitPolicy::WaitDurationAfterEOSE(timeout);
 
-        if (mode == UpdateMode::FullUpdate || mode == UpdateMode::PartialGossipUpdate)
+        if (mode == UpdateMode::FirstFullUpdate
+            || mode == UpdateMode::FullUpdate
+            || mode == UpdateMode::PartialGossipUpdate)
             && this.args.subscribe
             && let (Some(pubkeys), Some(kinds)) =
                 (this.args.pubkeys.clone(), this.args.kinds.clone())
@@ -394,11 +402,15 @@ impl Relays {
             futures.push(tokio::spawn(async move {
                 log::info!("discovering relays"); // TODO
                 let filter = this
-                    .filter_in_update_interval_with_age(if mode == UpdateMode::InitializeRelays {
-                        WEEK_SECS
-                    } else {
-                        0
-                    })
+                    .filter_in_update_interval_with_age(
+                        if mode == UpdateMode::InitializeRelays
+                            || mode == UpdateMode::FirstFullUpdate
+                        {
+                            WEEK_SECS
+                        } else {
+                            0
+                        },
+                    )
                     .kind(EventKind::RelayDiscovery)
                     .custom_tag(RELAY_CAPABILITY, "!auth")
                     .custom_tag(RELAY_CAPABILITY, "!payment");
