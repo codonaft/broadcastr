@@ -1,12 +1,12 @@
 use crate::{
-    Broadcastr, Policy, is_onion_relay,
+    Broadcastr, Policy, backoff, is_onion_relay,
     nostr_utils::has_publish_limitation,
     policy::InnerPolicy,
     proxied_client_builder,
     relay_lists::{MAX_GOSSIP_RELAYS_PER_USER, MAX_SEEN_AUTHORS, RelayLists},
-    retry_with_backoff_endless,
 };
 use anyhow::{self as ah, Context};
+use backon::{BackoffBuilder, Retryable};
 use core::convert::From;
 use futures::{StreamExt, future::join_all};
 use indexmap::{IndexMap, IndexSet};
@@ -36,6 +36,7 @@ use std::{
 use tokio::{
     sync::{Mutex, RwLock, Semaphore, watch},
     time,
+    time::sleep,
 };
 
 const RELAY_CAPABILITY: SingleLetterTag = SingleLetterTag::uppercase(Alphabet::R);
@@ -103,14 +104,14 @@ struct QueryEvent {
 impl Relays {
     pub(crate) async fn updater(this: Arc<Self>) -> ah::Result<()> {
         {
-            let seen_pubkeys = this.seen_pubkeys.clone();
-            let seen_pubkeys = seen_pubkeys.lock().await;
+            let mut seen_pubkeys = this.seen_pubkeys.lock().await;
+            let mut intervals = backoff(&this.args).build();
 
-            let this = this.clone();
-            let mut seen_pubkeys = seen_pubkeys.clone();
             for mode in [UpdateMode::InitializeRelays, UpdateMode::InitializeGossip] {
-                Self::maybe_init(this.clone(), mode, &mut seen_pubkeys).await?;
-                // TODO: backoff
+                while let Err(e) = Self::maybe_init(this.clone(), mode, &mut seen_pubkeys).await {
+                    log::error!("initialization failure: {e}");
+                    sleep(intervals.next().context("backoff")?).await;
+                }
             }
         }
 
@@ -119,7 +120,8 @@ impl Relays {
         let mut interval = time::interval(this.args.update_interval.0);
         loop {
             interval.tick().await;
-            retry_with_backoff_endless(this.args.clone(), || {
+
+            let attempt = || {
                 let this = this.clone();
                 async move {
                     {
@@ -130,12 +132,11 @@ impl Relays {
                             log::error!("failed to update relays: {e}");
                         }
                     }
-
-                    Self::update_subscriptions(this, mode, timeout).await?;
-                    Ok(())
+                    Self::update_subscriptions(this, mode, timeout).await
                 }
-            })
-            .await?;
+            };
+
+            attempt.retry(backoff(&this.args)).await?;
         }
     }
 

@@ -13,7 +13,7 @@ version = "0.0.3"
 [dependencies]
 anyhow = "1"
 argh = "0.1"
-backoff = { version = "0.4", features = ["tokio"] }
+backon = "1"
 const_format = "0.2"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false }

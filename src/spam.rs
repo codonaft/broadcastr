@@ -1,10 +1,10 @@
-use crate::{Broadcastr, proxied_client_builder, retry_with_backoff_endless};
+use crate::{Broadcastr, backoff, proxied_client_builder};
 use anyhow as ah;
-use backoff::{self as bf};
+use backon::Retryable;
 use nostr::PublicKey;
 use reqwest::Client as HttpClient;
 use std::collections::HashSet;
-use tokio::{sync::watch, task::JoinHandle, time};
+use tokio::{sync::watch, time};
 
 pub(crate) async fn azzamo_updater(
     args: &Broadcastr,
@@ -19,40 +19,37 @@ pub(crate) async fn azzamo_updater(
     loop {
         interval.tick().await;
         if let Err(e) =
-            update_azzamo_blocked_pubkeys(spam_pubkeys_sender.clone(), args.clone(), client.clone())
-                .await
+            update_azzamo_blocked_pubkeys(spam_pubkeys_sender.clone(), args, client.clone()).await
         {
             log::error!("failed to update azzamo blocked pubkeys: {e}");
         }
     }
 }
 
-fn update_azzamo_blocked_pubkeys(
+async fn update_azzamo_blocked_pubkeys(
     output: watch::Sender<HashSet<PublicKey>>,
-    args: Broadcastr,
+    args: &Broadcastr,
     client: HttpClient,
-) -> JoinHandle<ah::Result<()>> {
+) -> ah::Result<()> {
     let fetch = move || {
         let output = output.clone();
         let client = client.clone();
         async move {
             let items = async {
-                Ok(client
+                let result = client
                     .get("https://ban-api.azzamo.net/public/blocked/pubkeys")
                     .send()
                     .await?
                     .json::<HashSet<_>>()
-                    .await?)
+                    .await?;
+                Ok::<_, ah::Error>(result)
             }
-            .await
-            .map_err(bf::Error::transient)?;
+            .await?;
 
             log::debug!("azzamo: fetched {}", items.len());
-            output
-                .send(items)
-                .map_err(|e| bf::Error::transient(e.into()))?;
+            output.send(items)?;
             Ok(())
         }
     };
-    tokio::spawn(retry_with_backoff_endless(args, fetch))
+    fetch.retry(backoff(args)).await
 }

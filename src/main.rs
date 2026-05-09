@@ -7,10 +7,7 @@ mod spam;
 use crate::relays::{Relays, RelaysAndSenders};
 use anyhow as ah;
 use argh::FromArgs;
-use backoff::{
-    self as bf, ExponentialBackoff, ExponentialBackoffBuilder, Notify,
-    future::{Retry, Sleeper},
-};
+use backon::ExponentialBuilder;
 use const_format::concatcp;
 use futures::{FutureExt, TryFutureExt, future::try_join_all};
 use git_version::git_version;
@@ -313,6 +310,7 @@ async fn serve(
     ws_config: WebSocketConfig,
     relays: Arc<Relays>,
 ) -> ah::Result<()> {
+    // TODO: auth
     let relay_info = {
         let body = RelayInformationDocument {
             name: Some("broadcastr".to_string()),
@@ -407,19 +405,12 @@ fn proxied_client_builder(args: &Broadcastr) -> ah::Result<ClientBuilder> {
     Ok(client)
 }
 
-fn retry_with_backoff_endless<F, Fut>(
-    args: Broadcastr,
-    f: F,
-) -> Retry<impl Sleeper, ExponentialBackoff, impl Notify<ah::Error>, F, Fut>
-where
-    Fut: Future<Output = Result<(), bf::Error<ah::Error>>> + Send,
-    F: Fn() -> Fut + Send,
-{
-    let backoff = ExponentialBackoffBuilder::new()
-        .with_max_elapsed_time(None)
-        .with_max_interval(args.max_backoff_interval.0)
-        .build();
-    bf::future::retry(backoff, f)
+fn backoff(args: &Broadcastr) -> ExponentialBuilder {
+    ExponentialBuilder::default()
+        .with_jitter()
+        .without_max_times()
+        .with_min_delay(Duration::from_millis(500))
+        .with_max_delay(args.max_backoff_interval.0)
 }
 
 fn now() -> Duration {
