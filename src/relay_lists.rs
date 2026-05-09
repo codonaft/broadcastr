@@ -213,7 +213,7 @@ impl RelayLists {
                     .into_iter()
             })
         {
-            log::info!("event={event:?}"); // TODO
+            log::debug!("gossip event={event:?}");
             let pubkey = event.pubkey;
             if !seen_pubkeys.contains(&pubkey) {
                 seen_pubkeys.put(pubkey, Default::default());
@@ -246,7 +246,7 @@ impl RelayLists {
             }
         }
 
-        log::info!("current gossip state: {author_to_relays:?}"); // TODO
+        log::debug!("current gossip state: {author_to_relays:?}");
         Ok(author_to_relays)
     }
 

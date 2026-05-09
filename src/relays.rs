@@ -271,7 +271,7 @@ impl Relays {
     }
 
     async fn reconnect(&self, blocked_relays: IndexMap<RelayUrl, Duration>) {
-        log::info!("connecting");
+        log::debug!("connecting");
         let start = Instant::now();
         self.nostr_client
             .connect()
@@ -319,7 +319,7 @@ impl Relays {
                     filter.clone().authors(pubkeys.0.iter().copied()),
                     filter.pubkeys(pubkeys.0),
                 ];
-                log::info!("subscribing to {filters:?}"); // TODO
+                log::debug!("subscribing to {filters:?}");
                 let mut stream = this
                     .nostr_client
                     .stream_events(filters.clone())
@@ -400,7 +400,7 @@ impl Relays {
             && free_pool_entries > 0
         {
             futures.push(tokio::spawn(async move {
-                log::info!("discovering relays"); // TODO
+                log::debug!("discovering relays");
                 let filter = this
                     .filter_in_update_interval_with_age(
                         if mode == UpdateMode::InitializeRelays
@@ -434,8 +434,6 @@ impl Relays {
                         filters.push(tor.custom_tag(RELAY_NETWORK_TYPE, "!pow"));
                     }
                 }
-
-                log::info!("filters={filters:?}");
 
                 let mut stream = this
                     .nostr_client
@@ -504,7 +502,7 @@ impl Relays {
             .collect::<Result<Vec<_>, _>>()
             .map(|_| ())
             .inspect_err(|e| log::error!("subscriptions: {e}"));
-        log::info!("closed subscriptions after {}", elapsed(start));
+        log::debug!("closed subscriptions after {}", elapsed(start));
         result.map_err(ah::Error::from)
     }
 
