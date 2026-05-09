@@ -16,7 +16,7 @@ use log::LevelFilter;
 use nonzero_ext::*;
 use nostr::{
     JsonUtil,
-    nips::nip11::RelayInformationDocument,
+    nips::nip11::{Limitation, RelayInformationDocument},
     types::{RelayUrl, Timestamp},
 };
 use nostr_sdk::client::{Connection, ConnectionTarget};
@@ -310,12 +310,19 @@ async fn serve(
     ws_config: WebSocketConfig,
     relays: Arc<Relays>,
 ) -> ah::Result<()> {
-    // TODO: auth
     let relay_info = {
+        let args = &relays.args;
         let body = RelayInformationDocument {
-            name: Some("broadcastr".to_string()),
-            software: Some("git+https://github.com/codonaft/broadcastr".to_string()),
+            name: Some(env!("CARGO_PKG_NAME").to_string()),
+            software: Some(env!("CARGO_PKG_REPOSITORY").to_string()),
             version: Some(VERSION.to_string()),
+            limitation: Some(Limitation {
+                max_message_length: Some(args.max_msg_size as i32),
+                max_event_tags: Some(args.max_tags.into()),
+                min_pow_difficulty: args.min_pow.map(|p| p.into()),
+                restricted_writes: Some(args.pubkeys.is_some() || args.kinds.is_some()),
+                ..Default::default()
+            }),
             icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
             ..Default::default()
         }
