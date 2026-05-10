@@ -131,14 +131,15 @@ Options:
   - make sure we don't attempt to connect to faulty relays
     - retry to connect with an exponential backoff?
 - [ ] add metrics
+- [ ] endpoint that returns a healthy relays list?
 - [x] socks5/http proxy for all connections
 - [x] remove `spam.nostr.band`?
 - ~~login to NIP-42 relays?~~
   - does it make sense transmitting someone else's events from a generated `nsec`?
-- [ ] endpoint that returns a healthy relays list?
 - [ ] option to ignore TLS issues?
     - disallow for NIP-59 and NIP-70?
 - [x] per relay event kind allow-list
+- [ ] fetch newest event if it's a replaceable kind?
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.

@@ -14,11 +14,7 @@ use git_version::git_version;
 use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::{
-    JsonUtil,
-    nips::nip11::{Limitation, RelayInformationDocument},
-    types::Timestamp,
-};
+use nostr::types::Timestamp;
 use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
@@ -28,21 +24,26 @@ use std::{
     net::SocketAddr,
     num::{NonZeroU32, NonZeroUsize},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 use tokio::net::TcpListener;
 use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
-use tungstenite::protocol::WebSocketConfig;
+use tungstenite::{Bytes, protocol::WebSocketConfig};
 
 pub(crate) const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 const MIN_POOL_SIZE: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+
 const MIN_SIZE: usize = 128;
+const MAX_MSG_SIZE: usize = 70 * 1024;
+
 const SHUTDOWN: &str = "shutdown";
 
 const VERSION: &str = concatcp!(env!("CARGO_PKG_VERSION"), '-', git_version!());
 const USER_AGENT: &str = concatcp!(env!("CARGO_PKG_NAME"), '/', VERSION);
+
+static RELAY_INFO: OnceLock<Bytes> = OnceLock::new();
 
 #[derive(FromArgs, Clone, Debug)]
 #[argh(help_triggers("-h", "--help"))]
@@ -154,7 +155,7 @@ struct Broadcastr {
     request_timeout: DurationArg,
 
     /// event message size
-    #[argh(option, default = "70 * 1024")]
+    #[argh(option, default = "MAX_MSG_SIZE")]
     max_msg_size: usize,
 
     /// max incoming connections per listener IP address
@@ -162,7 +163,7 @@ struct Broadcastr {
     tcp_backlog: i32,
 
     /// ws frame size
-    #[argh(option, default = "4 * 70 * 1024")]
+    #[argh(option, default = "4 * MAX_MSG_SIZE")]
     max_frame_size: usize,
 }
 
@@ -212,10 +213,6 @@ async fn main() -> ah::Result<()> {
         ah::bail!("--max-relays should be at least {MIN_POOL_SIZE}");
     }
 
-    log::info!("starting {VERSION} {args:#?}");
-
-    let _ = crypto::CryptoProvider::install_default(crypto::ring::default_provider());
-
     if args.proxy.is_some() && args.tor_proxy.is_some() {
         ah::bail!("ambiguous proxy arguments");
     }
@@ -230,6 +227,14 @@ async fn main() -> ah::Result<()> {
         ah::bail!("{size} too small");
     }
 
+    log::info!("starting {VERSION} {args:#?}");
+
+    let _ = crypto::CryptoProvider::install_default(crypto::ring::default_provider());
+
+    RELAY_INFO
+        .set(nostr_utils::relay_info(&args)?)
+        .map_err(|e| ah::anyhow!("{e:?}"))?;
+
     let ws_message_size = args.max_msg_size * 4;
     let ws_config = WebSocketConfig::default()
         .max_write_buffer_size(
@@ -240,6 +245,7 @@ async fn main() -> ah::Result<()> {
         .max_message_size(Some(ws_message_size))
         .max_frame_size(Some(args.max_frame_size as usize));
 
+    // TODO: https://github.com/rust-nostr/nostr/issues/1350
     let connection = Connection::new();
     let connection = if let Some(proxy) = args.proxy {
         connection.proxy(proxy).target(ConnectionTarget::All)
@@ -311,43 +317,15 @@ async fn serve(
     ws_config: WebSocketConfig,
     relays: Arc<Relays>,
 ) -> ah::Result<()> {
-    let relay_info = {
-        let args = &relays.args;
-        let body = RelayInformationDocument {
-            name: Some(env!("CARGO_PKG_NAME").to_string()),
-            software: Some(env!("CARGO_PKG_REPOSITORY").to_string()),
-            version: Some(VERSION.to_string()),
-            limitation: Some(Limitation {
-                max_message_length: Some(args.max_msg_size as i32),
-                max_event_tags: Some(args.max_tags.into()),
-                min_pow_difficulty: args.min_pow.map(|p| p.into()),
-                restricted_writes: Some(args.pubkeys.is_some() || args.kinds.is_some()),
-                ..Default::default()
-            }),
-            icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
-            ..Default::default()
-        }
-        .as_json();
-        let length = body.len();
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \
-             {length}\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n{body}"
-        )
-    };
-
     loop {
         match listener.accept().await {
             Ok((stream, _client_addr)) => {
                 tokio::spawn(
-                    nostr_utils::handle_ws_connection(
-                        stream,
-                        ws_config,
-                        relays.clone(),
-                        relay_info.clone(),
-                    )
-                    .map_err(move |e| {
-                        log::info!("failed to handle connection from client: {e}");
-                    }),
+                    nostr_utils::handle_ws_connection(stream, ws_config, relays.clone()).map_err(
+                        move |e| {
+                            log::info!("failed to handle connection from client: {e}");
+                        },
+                    ),
                 );
             },
             Err(e) => {

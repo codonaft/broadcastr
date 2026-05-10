@@ -1,9 +1,9 @@
-use crate::relays::Relays;
+use crate::{Broadcastr, RELAY_INFO, VERSION, relays::Relays};
 use anyhow as ah;
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use futures_util::stream::SplitSink;
-use httparse::Status;
+use http_wire::{WireDecode, WireEncode, request::FullRequest};
 use indexmap::IndexSet;
 use nostr::{
     ClientMessage, EventId, JsonUtil, Kind as EventKind, PublicKey, RelayMessage, SubscriptionId,
@@ -11,10 +11,11 @@ use nostr::{
     serde_json,
 };
 use reqwest::header;
-use std::{borrow::Cow, net::IpAddr, str::FromStr, sync::Arc};
+use std::{borrow::Cow, mem::MaybeUninit, net::IpAddr, str::FromStr, sync::Arc};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
 use tungstenite::{
+    Bytes,
     handshake::server::{Request, Response},
     protocol::WebSocketConfig,
 };
@@ -35,11 +36,12 @@ pub(crate) async fn handle_ws_connection(
     mut stream: TcpStream,
     ws_config: WebSocketConfig,
     relays: Arc<Relays>,
-    relay_info: String,
 ) -> ah::Result<()> {
-    let ParsedHttpHeaders { ws, ip } = parse_http_headers(&stream).await;
+    let ParsedHttpHeaders { ws, ip } = ParsedHttpHeaders::parse(&stream).await?;
     if !ws {
-        stream.write_all(relay_info.as_bytes()).await?;
+        stream
+            .write_all(RELAY_INFO.get().context("relay info")?)
+            .await?;
         stream.flush().await?;
         return Ok(());
     }
@@ -85,36 +87,36 @@ pub(crate) async fn handle_ws_connection(
     Ok(())
 }
 
-async fn parse_http_headers(stream: &TcpStream) -> ParsedHttpHeaders {
-    let mut buffer = [0u8; 1024];
-    let _ = stream.peek(&mut buffer).await;
+impl ParsedHttpHeaders {
+    async fn parse(stream: &TcpStream) -> ah::Result<Self> {
+        let mut buffer = [0u8; 1024];
+        let _ = stream.peek(&mut buffer).await;
 
-    let mut result = ParsedHttpHeaders::default();
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut request = httparse::Request::new(&mut headers);
-    if let Ok(Status::Partial) = request.parse(&buffer) {
-        log::error!("too many request headers");
-    }
+        let mut headers = [const { MaybeUninit::uninit() }; 64];
+        let (request, _) =
+            FullRequest::decode_uninit(&buffer, &mut headers).context("decode HTTP request")?;
 
-    for i in request.headers {
-        if i.name.is_empty() {
-            break;
+        let mut result = ParsedHttpHeaders::default();
+        for i in request.head.headers {
+            if i.name.is_empty() {
+                break;
+            }
+            let header = i.name.to_lowercase();
+            let header = header.trim();
+            if header.contains("sec-websocket") {
+                result.ws = true;
+            } else if ["x-forwarded-for", "x-real-ip"].contains(&header)
+                && let Some(value) = str::from_utf8(i.value)
+                    .ok()
+                    .and_then(|v| v.split(',').next())
+            {
+                result.ip = value.trim().parse().ok();
+            }
         }
-        let header = i.name.to_lowercase();
-        let header = header.trim();
-        if header.contains("sec-websocket") {
-            result.ws = true;
-        } else if ["x-forwarded-for", "x-real-ip"].contains(&header)
-            && let Some(value) = str::from_utf8(i.value)
-                .ok()
-                .and_then(|v| v.split(',').next())
-        {
-            result.ip = value.trim().parse().ok();
-        }
-    }
 
-    log::debug!("parsed headers {:?}", result);
-    result
+        log::debug!("parsed headers {:?}", result);
+        Ok(result)
+    }
 }
 
 async fn handle_client_message(
@@ -273,6 +275,32 @@ pub(crate) fn has_publish_limitation(
     } else {
         false
     }
+}
+
+pub(crate) fn relay_info(args: &Broadcastr) -> ah::Result<Bytes> {
+    let body = RelayInformationDocument {
+        name: Some(env!("CARGO_PKG_NAME").to_string()),
+        software: Some(env!("CARGO_PKG_REPOSITORY").to_string()),
+        version: Some(VERSION.to_string()),
+        limitation: Some(Limitation {
+            max_message_length: Some(args.max_msg_size as i32),
+            max_event_tags: Some(args.max_tags.into()),
+            min_pow_difficulty: args.min_pow.map(|p| p.into()),
+            restricted_writes: Some(args.pubkeys.is_some() || args.kinds.is_some()),
+            ..Default::default()
+        }),
+        icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
+        ..Default::default()
+    }
+    .as_json();
+    let result = Response::builder()
+        .header(header::CONNECTION, "keep-alive")
+        .header(header::CONTENT_LENGTH, body.len())
+        .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(body)?
+        .encode()?;
+    Ok(result)
 }
 
 impl FromStr for PublicKeys {

@@ -221,12 +221,13 @@ dependencies = [
  "futures-util",
  "git-version",
  "governor",
- "httparse",
+ "http_wire",
  "humantime",
  "indexmap",
  "itertools",
  "log",
  "lru 0.18.0",
+ "mime",
  "nonzero_ext",
  "nostr",
  "nostr-sdk",
@@ -881,6 +882,20 @@ dependencies = [
  "http",
  "http-body",
  "pin-project-lite",
+]
+
+[[package]]
+name = "http_wire"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699384dad15e5b1330379cec7997f0a4da306fa0365fe344df505b31886d3a5c"
+dependencies = [
+ "bytes",
+ "futures",
+ "http",
+ "http-body-util",
+ "httparse",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
