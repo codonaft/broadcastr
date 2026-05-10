@@ -177,7 +177,7 @@ impl Relays {
             author_to_relays,
             outdated,
             relay_to_kinds,
-        } = RelayLists::new(self, mode, seen_pubkeys).await?;
+        } = RelayLists::update(self, mode, seen_pubkeys).await?;
 
         let current_relay_lists = self.policy.relay_lists();
 
@@ -320,10 +320,11 @@ impl Relays {
             let this = this.clone();
             futures.push(tokio::spawn(async move {
                 let filter = this.filter_in_update_interval_with_age(0).kinds(kinds.0);
-                let filters = [
-                    filter.clone().authors(pubkeys.0.iter().copied()),
-                    filter.pubkeys(pubkeys.0),
-                ];
+                let mut filters = vec![filter.clone().authors(pubkeys.0.iter().copied())];
+                if !this.args.no_mentions {
+                    filters.push(filter.pubkeys(pubkeys.0));
+                }
+
                 log::debug!("subscribing to {filters:?}");
                 let mut stream = this
                     .nostr_client

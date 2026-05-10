@@ -165,6 +165,7 @@ http {
   - ~~don't disconnect from relays specified in `10002` of the allowed npubs, keep reading from them?~~
 - [x] NIP-11
   - [ ] custom relay info
+  - [ ] don't serialize `null`?
 - [x] custom http page or a redirect
 - [x] improve RAM usage
   - run memory profiler
@@ -183,9 +184,21 @@ http {
 - ~~login to NIP-42 relays?~~
   - does it make sense transmitting someone else's events from a generated `nsec`?
 - [ ] option to ignore TLS issues?
-    - disallow for NIP-59 and NIP-70?
+  - disallow for NIP-59 and NIP-70?
 - [x] per relay event kind allow-list
-- [ ] fetch newest event if it's a replaceable kind?
+- [ ] fetch newest replaceable d-tagged event?
+  - when checking whether event exists on the relays
+  - kind 30023 in particular
+- [ ] batch events received from WS?
+  - query them using a single REQ filter
+- [ ] act as a proxy?
+  - as a RAM-cached proxy for all transmitted events?
+  - as a proxy to a list of relays?
+  - support REQ?
+- [ ] act as a NIP-59 gift wrap proxy?
+  - receive events from NIP-42 authenticated users only, WS only
+  - distribute to relevant 10050 relay lists
+  - ignore [broken](https://nostr.doctor) DM relays
 
 ## Support
 I'm currently investing [all my time](https://codonaft.com/why) in FOSS projects.

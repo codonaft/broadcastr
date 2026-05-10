@@ -303,7 +303,7 @@ pub(crate) fn relay_info(args: &Broadcastr) -> ah::Result<Bytes> {
         icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
         ..Default::default()
     }
-    .as_json();
+    .try_as_json()?;
     let result = Response::builder()
         .header(header::CONNECTION, "keep-alive")
         .header(header::CONTENT_LENGTH, body.len())

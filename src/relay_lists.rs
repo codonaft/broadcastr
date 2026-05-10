@@ -38,14 +38,13 @@ struct ParsedUrlFragments {
 }
 
 impl RelayLists {
-    pub(crate) async fn new(
+    pub(crate) async fn update(
         relays: &Relays,
         mode: UpdateMode,
         seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
     ) -> ah::Result<Self> {
         let now = now();
         let old = {
-            // TODO: relay list is now connected to the instance of relay list. make it static?
             let lists = relays.policy.relay_lists();
             let lists = lists.read().await;
             let block = lists
