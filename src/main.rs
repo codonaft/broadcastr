@@ -14,7 +14,7 @@ use git_version::git_version;
 use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::types::Timestamp;
+use nostr::{serde_json, types::Timestamp};
 use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
@@ -115,10 +115,6 @@ struct Broadcastr {
     #[argh(option)]
     proxy: Option<SocketAddr>,
 
-    /// redirect to a given URL when accessed from a browser
-    #[argh(option)]
-    redirect: Option<Url>,
-
     /// log level (default is info)
     #[argh(option, default = "LevelFilter::Info")]
     log_level: LevelFilter,
@@ -158,6 +154,14 @@ struct Broadcastr {
     /// request timeout (default is 10s)
     #[argh(option, default = "DurationArg(Duration::from_secs(10))")]
     request_timeout: DurationArg,
+
+    /// relay info NIP-11 JSON
+    #[argh(option)]
+    relay_info: Option<serde_json::Value>,
+
+    /// redirect to a given URL when accessed from a browser
+    #[argh(option)]
+    redirect: Option<Url>,
 
     /// event message size
     #[argh(option, default = "MAX_MSG_SIZE")]

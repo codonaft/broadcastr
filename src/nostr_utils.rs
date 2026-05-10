@@ -289,7 +289,7 @@ pub(crate) fn has_publish_limitation(
 }
 
 pub(crate) fn relay_info(args: &Broadcastr) -> ah::Result<Bytes> {
-    let body = RelayInformationDocument {
+    let mut body = serde_json::to_value(&RelayInformationDocument {
         name: Some(env!("CARGO_PKG_NAME").to_string()),
         software: Some(env!("CARGO_PKG_REPOSITORY").to_string()),
         version: Some(VERSION.to_string()),
@@ -302,8 +302,13 @@ pub(crate) fn relay_info(args: &Broadcastr) -> ah::Result<Bytes> {
         }),
         icon: Some("https://codonaft.com/assets/favicon-32x32.png".to_string()),
         ..Default::default()
+    })?;
+
+    if let Some(info) = &args.relay_info {
+        json_patch::merge(&mut body, info);
     }
-    .try_as_json()?;
+
+    let body = serde_json::from_value::<RelayInformationDocument>(body)?.try_as_json()?;
     let result = Response::builder()
         .header(header::CONNECTION, "keep-alive")
         .header(header::CONTENT_LENGTH, body.len())

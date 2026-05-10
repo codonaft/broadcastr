@@ -48,7 +48,7 @@ broadcastr \
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--block-ttl <block-ttl>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-protect] [--no-gossip-discovery] [--no-nip66-discovery] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--redirect <redirect>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--block-ttl <block-ttl>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-protect] [--no-gossip-discovery] [--no-nip66-discovery] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--relay-info <relay-info>] [--redirect <redirect>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -81,7 +81,6 @@ Options:
   --tor-proxy       connect to tor onion relays using socks5 proxy (e.g.
                     "127.0.0.1:9050")
   --proxy           make all connections using socks5 proxy
-  --redirect        redirect to a given URL when accessed from a browser
   --log-level       log level (default is info)
   --max-relays      limit the connection pool
   --max-events-by-author-per-min
@@ -95,6 +94,8 @@ Options:
                     max update backoff interval (default is 5m)
   --connect-timeout connection timeout (default is 15s)
   --request-timeout request timeout (default is 10s)
+  --relay-info      relay info NIP-11 JSON
+  --redirect        redirect to a given URL when accessed from a browser
   --max-msg-size    event message size
   --tcp-backlog     max incoming connections per listener IP address
   --max-frame-size  ws frame size
@@ -164,7 +165,7 @@ http {
   - with auto added `authors` and `since`
   - ~~don't disconnect from relays specified in `10002` of the allowed npubs, keep reading from them?~~
 - [x] NIP-11
-  - [ ] custom relay info
+  - [x] custom relay info
   - [ ] don't serialize `null`?
 - [x] custom http page or a redirect
 - [x] improve RAM usage
