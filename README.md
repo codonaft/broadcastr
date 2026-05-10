@@ -7,16 +7,19 @@
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-%23db61a2.svg?&logo=github&logoColor=white&labelColor=181717&style=flat-square)](#Support)
 
 Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWallet/blastr) with additional features:
-- spam filtering (~~[spam.nostr.band](https://spam.nostr.band)~~ and [azzamo.net](https://azzamo.net/introducing-the-azzamo-ban-api))
-- events filtering
+- relay [discovery](https://github.com/nostr-protocol/nips/blob/master/66.md)
+- [spam](https://azzamo.net/introducing-the-azzamo-ban-api) filtering
+- event filtering
     - kind
     - author/mention
     - [PoW](https://github.com/nostr-protocol/nips/blob/master/13.md)
 - [gossip](https://mikedilger.com/gossip-model/)
+- subscribe to events (of particular authors and event kinds) and distribute them automatically
+    - ignores [protected](https://github.com/nostr-protocol/nips/blob/master/70.md) events by default
 - tor/onion relays
-- minimizes the risk of being rate-limited by the relay
-    - it checks whether event is already published on a certain relay
 - relays ignore list
+- minimizes the risk of being rate-limited by relays
+    - it checks whether event is already published on a certain relay
 
 [Changelogs](https://codonaft.com/broadcastr).
 
@@ -106,29 +109,41 @@ Options:
 <p>
 
 ```
-location / {
-  proxy_http_version 1.1;
-  proxy_connect_timeout 20s;
-  proxy_socket_keepalive on;
-  proxy_send_timeout 365d;
-  proxy_read_timeout 365d;
+http {
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+  }
 
-  proxy_request_buffering off;
-  proxy_buffering off;
+  real_ip_header X-Forwarded-For;
+  real_ip_recursive on;
 
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  server {
+    location / {
+      proxy_http_version 1.1;
+      proxy_connect_timeout 20s;
+      proxy_socket_keepalive on;
+      proxy_send_timeout 365d;
+      proxy_read_timeout 365d;
 
-  proxy_set_header Upgrade $http_upgrade;
-  proxy_set_header Connection "upgrade";
+      proxy_request_buffering off;
+      proxy_buffering off;
 
-  proxy_pass http://localhost:8080/;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+
+      proxy_pass http://localhost:8080/;
+    }
+  }
 }
 ```
 
 </p>
 </details>
 
-▶ ⚙️ [**OpenRC**](https://github.com/codonaft/broadcastr/tree/main/openrc)
+▶ ⚙️ [**OpenRC**](https://github.com/codonaft/broadcastr/blob/main/openrc/broadcastr.initd)
 
 ## TODO
 - [x] make it compatible with ordinary clients (besides `nak`)
@@ -154,7 +169,7 @@ location / {
 - [x] improve RAM usage
   - run memory profiler
   - disconnect from relays?
-    - that previousely didn't receive events with the same kind?
+    - that previously didn't receive events with the same kind?
     - that closed connections after we sent them event?
     - option to disconnect after timeout?
     - [x] which are NIP-42-only ("auth-required"/"auth failed")
@@ -163,9 +178,8 @@ location / {
   - make sure we don't attempt to connect to faulty relays
     - retry to connect with an exponential backoff?
 - [ ] add metrics
-- [ ] endpoint that returns a healthy relays list?
+- [ ] endpoint that returns a healthy relay list?
 - [x] socks5/http proxy for all connections
-- [x] remove `spam.nostr.band`?
 - ~~login to NIP-42 relays?~~
   - does it make sense transmitting someone else's events from a generated `nsec`?
 - [ ] option to ignore TLS issues?
