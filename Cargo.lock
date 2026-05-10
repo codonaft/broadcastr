@@ -221,6 +221,7 @@ dependencies = [
  "futures-util",
  "git-version",
  "governor",
+ "http-body-util",
  "http_wire",
  "humantime",
  "indexmap",

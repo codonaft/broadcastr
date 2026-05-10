@@ -44,6 +44,7 @@ const VERSION: &str = concatcp!(env!("CARGO_PKG_VERSION"), '-', git_version!());
 const USER_AGENT: &str = concatcp!(env!("CARGO_PKG_NAME"), '/', VERSION);
 
 static RELAY_INFO: OnceLock<Bytes> = OnceLock::new();
+static REDIRECT: OnceLock<Bytes> = OnceLock::new();
 
 #[derive(FromArgs, Clone, Debug)]
 #[argh(help_triggers("-h", "--help"))]
@@ -113,6 +114,10 @@ struct Broadcastr {
     /// make all connections using socks5 proxy
     #[argh(option)]
     proxy: Option<SocketAddr>,
+
+    /// redirect to a given URL when accessed from a browser
+    #[argh(option)]
+    redirect: Option<Url>,
 
     /// log level (default is info)
     #[argh(option, default = "LevelFilter::Info")]
@@ -233,6 +238,9 @@ async fn main() -> ah::Result<()> {
 
     RELAY_INFO
         .set(nostr_utils::relay_info(&args)?)
+        .map_err(|e| ah::anyhow!("{e:?}"))?;
+    REDIRECT
+        .set(nostr_utils::redirect(&args)?)
         .map_err(|e| ah::anyhow!("{e:?}"))?;
 
     let ws_message_size = args.max_msg_size * 4;

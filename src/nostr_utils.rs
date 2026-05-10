@@ -1,8 +1,9 @@
-use crate::{Broadcastr, RELAY_INFO, VERSION, relays::Relays};
+use crate::{Broadcastr, REDIRECT, RELAY_INFO, VERSION, relays::Relays};
 use anyhow as ah;
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use futures_util::stream::SplitSink;
+use http_body_util::Empty;
 use http_wire::{WireDecode, WireEncode, request::FullRequest};
 use indexmap::IndexSet;
 use nostr::{
@@ -10,7 +11,7 @@ use nostr::{
     nips::nip11::{Limitation, RelayInformationDocument},
     serde_json,
 };
-use reqwest::header;
+use reqwest::{StatusCode, header};
 use std::{borrow::Cow, mem::MaybeUninit, net::IpAddr, str::FromStr, sync::Arc};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config, tungstenite::Message};
@@ -19,6 +20,8 @@ use tungstenite::{
     handshake::server::{Request, Response},
     protocol::WebSocketConfig,
 };
+
+pub(crate) const APPLICATION_NOSTR_JSON: &str = "application/nostr+json";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PublicKeys(pub IndexSet<PublicKey>);
@@ -29,6 +32,7 @@ pub(crate) struct EventKinds(pub IndexSet<EventKind>);
 #[derive(Default, Debug)]
 struct ParsedHttpHeaders {
     ws: bool,
+    info: bool,
     ip: Option<IpAddr>,
 }
 
@@ -37,11 +41,15 @@ pub(crate) async fn handle_ws_connection(
     ws_config: WebSocketConfig,
     relays: Arc<Relays>,
 ) -> ah::Result<()> {
-    let ParsedHttpHeaders { ws, ip } = ParsedHttpHeaders::parse(&stream).await?;
+    let ParsedHttpHeaders { ws, info, ip } = ParsedHttpHeaders::parse(&stream).await?;
     if !ws {
-        stream
-            .write_all(RELAY_INFO.get().context("relay info")?)
-            .await?;
+        let response = if info {
+            RELAY_INFO.get()
+        } else {
+            REDIRECT.get()
+        }
+        .context("HTTP response")?;
+        stream.write_all(response).await?;
         stream.flush().await?;
         return Ok(());
     }
@@ -105,12 +113,15 @@ impl ParsedHttpHeaders {
             let header = header.trim();
             if header.contains("sec-websocket") {
                 result.ws = true;
-            } else if ["x-forwarded-for", "x-real-ip"].contains(&header)
-                && let Some(value) = str::from_utf8(i.value)
-                    .ok()
-                    .and_then(|v| v.split(',').next())
+            } else if let Some(value) = str::from_utf8(i.value)
+                .ok()
+                .and_then(|v| v.split(',').next())
             {
-                result.ip = value.trim().parse().ok();
+                if header == "accept" && value == APPLICATION_NOSTR_JSON {
+                    result.info = true;
+                } else if ["x-forwarded-for", "x-real-ip"].contains(&header) {
+                    result.ip = value.trim().parse().ok();
+                }
             }
         }
 
@@ -299,6 +310,23 @@ pub(crate) fn relay_info(args: &Broadcastr) -> ah::Result<Bytes> {
         .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(body)?
+        .encode()?;
+    Ok(result)
+}
+
+pub(crate) fn redirect(args: &Broadcastr) -> ah::Result<Bytes> {
+    let location = if let Some(url) = &args.redirect {
+        url.as_str()
+    } else {
+        env!("CARGO_PKG_REPOSITORY")
+    };
+    let result = Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::CONNECTION, "close")
+        .header(header::CONTENT_LENGTH, 0)
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::LOCATION, location)
+        .body(Empty::<Bytes>::new())?
         .encode()?;
     Ok(result)
 }

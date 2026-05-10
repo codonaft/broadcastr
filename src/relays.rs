@@ -1,6 +1,6 @@
 use crate::{
     Broadcastr, Policy, backoff,
-    nostr_utils::has_publish_limitation,
+    nostr_utils::{APPLICATION_NOSTR_JSON, has_publish_limitation},
     policy::InnerPolicy,
     proxied_client_builder,
     relay_lists::{MAX_GOSSIP_RELAYS_PER_USER, MAX_SEEN_AUTHORS, RelayLists},
@@ -713,7 +713,7 @@ impl Relays {
                     let info = this
                         .http_client
                         .get(url)
-                        .header(header::ACCEPT, "application/nostr+json")
+                        .header(header::ACCEPT, APPLICATION_NOSTR_JSON)
                         .send()
                         .await;
                     match info {
