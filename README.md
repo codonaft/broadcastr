@@ -34,7 +34,10 @@ cargo install --locked --force --git https://github.com/codonaft/broadcastr
 
 ## Run
 ```
-broadcastr --listen ws://localhost:8080 --relays https://codonaft.com/relays.json --read-relays wss://monitorlizard.nostr1.com,wss://relay.nostr.watch,wss://relaypag.es
+broadcastr \
+  --listen ws://localhost:8080 \
+  --relays https://codonaft.com/relays.json \
+  --read-relays wss://monitorlizard.nostr1.com,wss://relay.nostr.watch,wss://relaypag.es
 ```
 
 <details>
@@ -97,6 +100,35 @@ Options:
 </p>
 </details>
 
+<details>
+<summary><b>🌐 nginx 👁️</b></summary>
+<p>
+
+```
+location / {
+  proxy_http_version 1.1;
+  proxy_connect_timeout 20s;
+  proxy_socket_keepalive on;
+  proxy_send_timeout 365d;
+  proxy_read_timeout 365d;
+
+  proxy_request_buffering off;
+  proxy_buffering off;
+
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection "upgrade";
+
+  proxy_pass http://localhost:8080/;
+}
+```
+
+</p>
+</details>
+
+▶ ⚙️ [**OpenRC**](https://github.com/codonaft/broadcastr/tree/main/openrc)
+
 ## TODO
 - [x] make it compatible with ordinary clients (besides `nak`)
   - [x] support delivery of multiple events over the same connection
@@ -117,7 +149,6 @@ Options:
   - ~~don't disconnect from relays specified in `10002` of the allowed npubs, keep reading from them?~~
 - [x] NIP-11
   - [ ] custom relay info
-  - [ ] make it work behind reverse proxy
 - [ ] custom http page or a redirect
 - [x] improve RAM usage
   - run memory profiler
