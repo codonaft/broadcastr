@@ -10,6 +10,7 @@ use backon::{BackoffBuilder, Retryable};
 use core::convert::From;
 use futures::{StreamExt, future::join_all};
 use indexmap::{IndexMap, IndexSet};
+use itertools::{Either, Itertools};
 use lru::LruCache;
 use nostr::{
     Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, TagStandard, Timestamp,
@@ -26,7 +27,7 @@ use nostr_sdk::{
 use reqwest::{Client as HttpClient, Url, header};
 use std::{
     collections::{HashMap, HashSet},
-    iter::once,
+    iter,
     net::IpAddr,
     num::NonZeroUsize,
     ops::Sub,
@@ -60,6 +61,8 @@ const WEEK_SECS: u64 = 7 * Duration::from_hours(24).as_secs();
 const MAX_GOSSIP_RELAYS: NonZeroUsize = NonZeroUsize::new(MAX_GOSSIP_RELAYS_PER_USER)
     .unwrap()
     .saturating_mul(MAX_SEEN_AUTHORS);
+
+const NEWEST_EVENT_ATTEMPTS: usize = 3;
 
 #[derive(Debug)]
 pub(crate) struct Relays {
@@ -98,6 +101,7 @@ pub(crate) enum UpdateMode {
 
 #[derive(Debug)]
 struct QueryEvent {
+    newest_event: Event,
     found_on_relays: IndexSet<RelayUrl>,
     relays_without_event: IndexSet<RelayUrl>,
 }
@@ -524,7 +528,7 @@ impl Relays {
         }
 
         tokio::spawn(async move {
-            if let Err(e) = Self::handle_event(this, event, found_on_relays).await {
+            if let Err(e) = Self::handle_event(this, event, found_on_relays, 1).await {
                 log::error!("failed to handle a message: {e}");
             }
         });
@@ -535,10 +539,11 @@ impl Relays {
         this: Arc<Self>,
         event: Event,
         found_on_relays: IndexSet<RelayUrl>,
+        retry: usize,
     ) -> ah::Result<()> {
         let mut seen_pubkeys = this.seen_pubkeys.lock().await;
         let mut pubkeys = HashSet::default();
-        for i in once(event.pubkey).chain(event.tags.public_keys().copied()) {
+        for i in iter::once(event.pubkey).chain(event.tags.public_keys().copied()) {
             seen_pubkeys.put(i, Default::default());
             pubkeys.insert(i);
         }
@@ -548,21 +553,30 @@ impl Relays {
 
         let event_id = event.id;
         let QueryEvent {
+            newest_event,
             found_on_relays,
             relays_without_event,
         } = QueryEvent::find(&event, &pubkeys, &this, &found_on_relays)
             .await
             .context("query")?;
 
+        let newest_event_id = newest_event.id;
+        if event_id != newest_event.id {
+            log::info!("{event_id} is outdated, broadcasting {newest_event_id} instead");
+        }
+
         let found_on_relays_before_broadcasting = found_on_relays.len();
         if relays_without_event.is_empty() {
             ah::bail!(
-                "already found the event {event_id} on all of the \
+                "already found the event {newest_event_id} on all of the \
                  {found_on_relays_before_broadcasting} relays, not going to broadcast it",
             );
         } else {
             let found_message = if found_on_relays_before_broadcasting > 0 {
-                format!("found event {event_id} on {found_on_relays_before_broadcasting} relays, ")
+                format!(
+                    "found event {newest_event_id} on {found_on_relays_before_broadcasting} \
+                     relays, "
+                )
             } else {
                 "".to_string()
             };
@@ -572,40 +586,73 @@ impl Relays {
                 found_on_relays_before_broadcasting.saturating_add(relays_without_event.len()),
             );
 
-            join_all(relays_without_event.into_iter().map(|relay_url| async {
-                let relay = this.nostr_client.relay(relay_url).await?;
-                if let Some(relay) = relay
-                    && relay.status() != RelayStatus::Banned
-                {
-                    relay.wait_for_connection(this.args.connect_timeout.0).await;
-                    relay
-                        .send_event(&event)
-                        .wait_for_ok(true)
-                        .ok_timeout(this.args.request_timeout.0)
-                        .authentication_timeout(Duration::from_secs(0))
-                        .await?;
+            join_all(relays_without_event.into_iter().map(|relay_url| {
+                let this = this.clone();
+                let newest_event = newest_event.clone();
+                async move {
+                    let relay = this.nostr_client.relay(relay_url).await?;
+                    if let Some(relay) = relay
+                        && relay.status() != RelayStatus::Banned
+                    {
+                        relay.wait_for_connection(this.args.connect_timeout.0).await;
+                        relay
+                            .send_event(&newest_event)
+                            .wait_for_ok(true)
+                            .ok_timeout(this.args.request_timeout.0)
+                            .authentication_timeout(Duration::from_secs(0))
+                            .await?;
+                    }
+                    Ok::<_, ah::Error>(())
                 }
-                Ok::<_, ah::Error>(())
             }))
             .await;
 
             let QueryEvent {
+                newest_event,
                 found_on_relays,
                 relays_without_event,
-            } = QueryEvent::find(&event, &pubkeys, &this, &found_on_relays)
+            } = QueryEvent::find(&newest_event, &pubkeys, &this, &found_on_relays)
                 .await
                 .context("re-query")?;
-            let broadcasted_to_new_relays = found_on_relays
-                .len()
-                .saturating_sub(found_on_relays_before_broadcasting);
-            log::info!(
-                "event {event_id} was accepted by {broadcasted_to_new_relays} relays (now it's \
-                 available on {} of {} relays)",
-                found_on_relays.len(),
-                found_on_relays
+            if newest_event_id == newest_event.id {
+                let broadcasted_to_new_relays = found_on_relays
                     .len()
-                    .saturating_add(relays_without_event.len()),
-            );
+                    .saturating_sub(found_on_relays_before_broadcasting);
+                log::info!(
+                    "event {newest_event_id} was accepted by {broadcasted_to_new_relays} relays \
+                     (now it's available on {} of {} relays)",
+                    found_on_relays.len(),
+                    found_on_relays
+                        .len()
+                        .saturating_add(relays_without_event.len()),
+                );
+            } else {
+                if retry <= NEWEST_EVENT_ATTEMPTS {
+                    log::warn!(
+                        "event {newest_event_id} was accepted but we've found newer event {}, \
+                         retrying {retry}/{NEWEST_EVENT_ATTEMPTS}",
+                        newest_event.id
+                    );
+
+                    drop(seen_pubkeys);
+                    Box::pin(Self::handle_event(
+                        this,
+                        newest_event,
+                        found_on_relays,
+                        retry + 1,
+                    ))
+                    .await?;
+                } else {
+                    log::error!(
+                        "event {newest_event_id} was accepted, we've found newer event {} on \
+                         {found_on_relays:?}, but we're out of attempts, not going to broadcast it",
+                        newest_event.id
+                    );
+                }
+
+                return Ok(());
+            }
+
             Self::ignore_failing_relays_without_our_events(
                 this.clone(),
                 relays_without_event,
@@ -963,50 +1010,89 @@ impl QueryEvent {
     ) -> ah::Result<Self> {
         let args = &relays.args;
         let nostr_client = &relays.nostr_client;
-        let event_id = event.id;
         let read_write = relays.policy.read_write_for(pubkeys, event.kind).await;
-        let found_on_relays = join_all(nostr_client.relays().await.into_iter().map(
-            |(relay_url, relay)| {
-                let read_write = read_write.clone();
-                async move {
-                    if relay.status() == RelayStatus::Banned
-                        || !read_write.contains(&relay_url)
-                        || found_on_relays.contains(&relay_url)
-                    {
-                        return None;
-                    }
 
-                    relay.wait_for_connection(args.connect_timeout.0).await;
-                    let filter = Filter::new().id(event_id).limit(1);
-                    match relay
-                        .fetch_events(filter)
-                        .timeout(args.request_timeout.0)
-                        .await
-                    {
-                        Ok(events)
-                            if !events.is_empty() && events.iter().any(|i| i.id == event_id) =>
+        let now = Timestamp::now().as_secs();
+        let until = Timestamp::from_secs(now.saturating_add(args.update_interval.0.as_secs()));
+
+        let (newest_event, found_on_relays): (Event, IndexSet<RelayUrl>) =
+            join_all(nostr_client.relays().await.into_iter().map({
+                let read_write = read_write.clone();
+                move |(relay_url, relay)| {
+                    let read_write = read_write.clone();
+                    async move {
+                        if relay.status() == RelayStatus::Banned
+                            || !read_write.contains(&relay_url)
+                            || found_on_relays.contains(&relay_url)
                         {
-                            Some(relay_url)
-                        },
-                        Ok(_) => None,
-                        Err(e) => {
-                            log::debug!("cannot query relay {relay_url}: {e}");
-                            None
-                        },
+                            return None;
+                        }
+
+                        relay.wait_for_connection(args.connect_timeout.0).await;
+
+                        let filter = Filter::new()
+                            .author(event.pubkey)
+                            .kind(event.kind)
+                            .since(event.created_at)
+                            .until(until)
+                            .limit(1);
+                        let filter = if event.kind.is_addressable()
+                            && let Some(identifier) = event.tags.identifier()
+                        {
+                            filter.identifier(identifier)
+                        } else if event.kind.is_replaceable() {
+                            filter
+                        } else {
+                            filter.id(event.id)
+                        };
+
+                        match relay
+                            .fetch_events(filter.clone())
+                            .timeout(args.request_timeout.0)
+                            .await
+                        {
+                            Ok(events) if !events.is_empty() => events
+                                .into_iter()
+                                .filter(|e| filter.match_event(e, MatchEventOptions::default()))
+                                .max_by_key(|e| e.created_at)
+                                .map(|e| (e, relay_url)),
+                            Ok(_) => None,
+                            Err(e) => {
+                                log::debug!("cannot query relay {relay_url}: {e}");
+                                None
+                            },
+                        }
                     }
                 }
-            },
-        ))
-        .await
-        .into_iter()
-        .flatten()
-        .chain(found_on_relays.iter().cloned())
-        .collect::<IndexSet<RelayUrl>>();
+            }))
+            .await
+            .into_iter()
+            .flatten()
+            .chunk_by(|(e, _)| e.clone())
+            .into_iter()
+            .max_by_key(|(e, _)| e.created_at)
+            .map(|(newest_event, event_to_relay_urls)| {
+                let same = event.id == newest_event.id;
+                (
+                    newest_event,
+                    event_to_relay_urls
+                        .into_iter()
+                        .map(|(_, u)| u)
+                        .chain(if same {
+                            Either::Left(found_on_relays.iter().cloned())
+                        } else {
+                            Either::Right(iter::empty())
+                        })
+                        .collect::<IndexSet<RelayUrl>>(),
+                )
+            })
+            .unwrap_or_else(|| (event.clone(), found_on_relays.clone()));
 
         // some relays were possibly banned and removed, retrieving them again
         let relays_without_event = read_write.sub(&found_on_relays);
 
         Ok(Self {
+            newest_event,
             found_on_relays,
             relays_without_event,
         })

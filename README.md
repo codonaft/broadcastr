@@ -11,6 +11,7 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
 - [spam](https://azzamo.net/introducing-the-azzamo-ban-api) filtering
 - event filtering
     - kind
+        - possible per relay as well
     - author/mention
     - [PoW](https://github.com/nostr-protocol/nips/blob/master/13.md)
 - [gossip](https://mikedilger.com/gossip-model/)
@@ -187,9 +188,7 @@ http {
 - [ ] option to ignore TLS issues?
   - disallow for NIP-59 and NIP-70?
 - [x] per relay event kind allow-list
-- [ ] fetch newest replaceable d-tagged event?
-  - when checking whether event exists on the relays
-  - kind 30023 in particular
+- [x] find newest replaceable and addressable events and broadcast them instead
 - [ ] batch events received from WS?
   - query them using a single REQ filter
 - [ ] act as a proxy?
