@@ -1,10 +1,18 @@
 use crate::{Broadcastr, backoff, proxied_client_builder};
 use anyhow as ah;
 use backon::Retryable;
-use nostr::PublicKey;
+use nostr::{Event, PublicKey};
 use reqwest::Client as HttpClient;
 use std::collections::HashSet;
 use tokio::{sync::watch, time};
+
+pub(crate) async fn check_possible_spam(_event: &Event) -> ah::Result<()> {
+    // TODO: if responded faster than it was possible to read the parent event - spam
+    // TODO: if pubkey is listed in authors' subscriptions - not spam
+    // TODO: if responded < 4h ago - put on quarantine and recheck
+    // TODO: if event is labeled by a trusted spam detector bot - spam
+    Ok(())
+}
 
 pub(crate) async fn run_azzamo(
     args: &Broadcastr,

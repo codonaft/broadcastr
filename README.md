@@ -69,9 +69,10 @@ Options:
                     "0,1,3,5,6,7,4550,34550")
   --pubkeys         allow authors or mentioned authors only (comma-separated
                     hex/bech32/NIP-21 allow-list)
-  --no-mentions     disallow mentions (of the allowed authors) by others
-  --subscribe       subscribe and automatically distribute events (of the
-                    allowed authors and kinds)
+  --no-mentions     disallow mentions of the allowed authors' events or events
+                    with the authors' replies
+  --subscribe       subscribe and automatically distribute all allowed events
+                    (including mentions)
   --no-protect      ignore NIP-70 protection tag for the automatically
                     distributed events
   --no-gossip-discovery
@@ -191,10 +192,24 @@ http {
   - disallow for NIP-59 and NIP-70?
 - [x] per relay event kind allow-list
 - [x] find newest replaceable and addressable events and broadcast them instead
-- [ ] act as a proxy?
-  - as a RAM-cached proxy for all transmitted events?
-  - as a proxy to a list of relays?
-  - support REQ?
+- [ ] allow transmission of others' events mentioned by allowed authors
+    - except for NIP-56 reported events and NIP-59 gift wraps
+- [ ] disallow potentially spammy events from strangers that mention allowed authors
+    - [ ] check how fast the stranger responded
+        - responding to a long enough article too fast is a red flag
+    - [ ] check if the stranger is listed in authors' subscriptions
+    - check spam reports on the stranger? check in mute-lists?
+        - the reports/mute-lists might not be [trustworthy](https://nostrudel.ninja/u/nprofile1qqs8wakr9493685t725kh2ltgwke4hs400fk8kymslak8eh3g42c3zqx0vsmr/muted-by), but happened due to some interpersonal conflict
+        - if it's a new event—there will not be any reports yet
+            - put possibly spammy events to quarantine period and recheck later before transmitting?
+        - [ ] check whether it was labeled by a trusted spam detector bot?
+    - [ ] check the age of the stranger?
+        - count their public posts and comments?
+    - check trust rank?
+    - in [this](https://primal.net/e/nevent1qqsqqq9wtsygcdjn7anyyatgx04fk5kaurt7ka029d5uvzfzzpp6p2sgz7dc6) example, allow event `6cb47b0680acb9ec08cce944a1350de030e3be63e402d2eaec01805de757a41a` but not `0000ae5c088c3653f76642756833ea9b52dde0d7eb75ea2b69c609221043a0aa`
+- [ ] act as a proxy for REQs?
+  - a RAM-cached proxy for all transmitted events?
+  - a proxy to a list of relays?
 - [ ] act as a NIP-59 gift wrap proxy?
   - receive events from NIP-42 authenticated users only, WS only
   - distribute to relevant 10050 relay lists

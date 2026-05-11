@@ -1,9 +1,10 @@
 use crate::{
     Broadcastr, Policy, backoff,
-    nostr_utils::{APPLICATION_NOSTR_JSON, has_publish_limitation},
+    nostr_utils::{self, APPLICATION_NOSTR_JSON, has_publish_limitation},
     policy::InnerPolicy,
     proxied_client_builder,
-    relay_lists::{MAX_GOSSIP_RELAYS_PER_USER, MAX_SEEN_AUTHORS, RelayLists},
+    relay_lists::{MAX_SEEN_AUTHORS, RelayLists},
+    spam::check_possible_spam,
 };
 use anyhow::{self as ah, Context};
 use backon::{BackoffBuilder, Retryable};
@@ -29,7 +30,6 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     net::IpAddr,
-    num::NonZeroUsize,
     ops::Sub,
     sync::Arc,
     time::{Duration, Instant},
@@ -57,10 +57,6 @@ const FATAL_CONNECTION_ERRORS: [&str; 7] = [
 
 const WARMUP: Duration = Duration::from_secs(15);
 const WEEK_SECS: u64 = 7 * Duration::from_hours(24).as_secs();
-
-const MAX_GOSSIP_RELAYS: NonZeroUsize = NonZeroUsize::new(MAX_GOSSIP_RELAYS_PER_USER)
-    .unwrap()
-    .saturating_mul(MAX_SEEN_AUTHORS);
 
 const NEWEST_EVENT_ATTEMPTS: usize = 3;
 
@@ -208,9 +204,6 @@ impl Relays {
             .clone()
             .into_values()
             .flat_map(|i| i.into_iter())
-            .collect::<IndexSet<_>>()
-            .into_iter()
-            .take(MAX_GOSSIP_RELAYS.into())
             .collect::<IndexSet<_>>();
 
         for i in &outdated {
@@ -326,6 +319,7 @@ impl Relays {
                 let filter = this.filter_in_update_interval_with_age(0).kinds(kinds.0);
                 let mut filters = vec![filter.clone().authors(pubkeys.0.iter().copied())];
                 if !this.args.no_mentions {
+                    // TODO: q-tag? probably no, because "Authors of the e and q tags SHOULD be added as p tags to notify of a new reply or quote"
                     filters.push(filter.pubkeys(pubkeys.0));
                 }
 
@@ -528,7 +522,13 @@ impl Relays {
         }
 
         tokio::spawn(async move {
-            if let Err(e) = Self::handle_event(this, event, found_on_relays, 1).await {
+            if !this.args.no_mentions
+                && let Some(nostr_utils::PublicKeys(authors)) = &this.args.pubkeys
+                && event.tags.public_keys().any(|p| authors.contains(p))
+                && let Err(e) = check_possible_spam(&event).await
+            {
+                log::error!("possible spam check failure: {e}");
+            } else if let Err(e) = Self::handle_event(this, event, found_on_relays, 1).await {
                 log::error!("failed to handle a message: {e}");
             }
         });

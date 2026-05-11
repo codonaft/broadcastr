@@ -83,11 +83,11 @@ struct Broadcastr {
     #[argh(option)]
     pubkeys: Option<nostr_utils::PublicKeys>,
 
-    /// disallow mentions (of the allowed authors) by others
+    /// disallow mentions of the allowed authors' events or events with the authors' replies
     #[argh(switch)]
     no_mentions: bool,
 
-    /// subscribe and automatically distribute events (of the allowed authors and kinds)
+    /// subscribe and automatically distribute all allowed events (including mentions)
     #[argh(switch)]
     subscribe: bool,
 
