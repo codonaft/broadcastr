@@ -8,17 +8,19 @@ use nostr::{
     util::BoxedFuture,
 };
 use nostr_sdk::prelude::{AdmitPolicy, AdmitStatus, PolicyError};
+use parking_lot::lock_api::RwLockUpgradableReadGuard;
 use std::{collections::HashSet, net::IpAddr, num::NonZeroUsize, sync::Arc};
-use tokio::sync::{Mutex, RwLock, watch};
+use tokio::sync::{RwLock, watch};
 
 const MAX_SEEN_EVENTS: NonZeroUsize = NonZeroUsize::new(32768).unwrap();
 
 #[derive(Debug)]
 pub(crate) struct Policy {
     inner: InnerPolicy,
-    seen_event_ids: Mutex<LruCache<EventId, ()>>,
-    events_by_author: RateLimitBy<PublicKey>,
+    seen_event_ids: parking_lot::RwLock<LruCache<EventId, ()>>,
+    all_events: RateLimitBy<()>,
     events_by_ip: RateLimitBy<IpAddr>,
+    events_by_author: RateLimitBy<PublicKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,29 +41,18 @@ impl Policy {
     pub(crate) fn new(inner: InnerPolicy, args: &Broadcastr) -> Self {
         Self {
             inner,
-            seen_event_ids: Mutex::new(LruCache::new(MAX_SEEN_EVENTS)),
+            seen_event_ids: parking_lot::RwLock::new(LruCache::new(MAX_SEEN_EVENTS)),
+            all_events: RateLimiter::keyed(Quota::per_minute(args.max_events_per_min)),
+            events_by_ip: RateLimiter::keyed(Quota::per_minute(args.max_events_by_ip_per_min)),
             events_by_author: RateLimiter::keyed(Quota::per_minute(
                 args.max_events_by_author_per_min,
             )),
-            events_by_ip: RateLimiter::keyed(Quota::per_minute(args.max_events_by_ip_per_min)),
         }
     }
 
     pub(crate) async fn check(&self, event: &Event, ip: Option<IpAddr>) -> ah::Result<()> {
-        let event_id = event.id;
-
-        {
-            let mut seen = self.seen_event_ids.lock().await;
-            if seen.contains(&event_id) {
-                ah::bail!("rate-limit: too many attempts to transmit the same event");
-            }
-            seen.put(event_id, ());
-        }
-
-        self.inner.check_event(event)?;
-
-        if self.events_by_author.check_key(&event.pubkey).is_err() {
-            ah::bail!("rate-limit: too many attempts to transmit event by the same author");
+        if self.all_events.check_key(&()).is_err() {
+            ah::bail!("rate-limit: too many events");
         }
 
         if let Some(ip) = ip
@@ -70,7 +61,21 @@ impl Policy {
             ah::bail!("rate-limit: too many events from the same IP");
         }
 
-        log::debug!("received event {event_id}");
+        if self.events_by_author.check_key(&event.pubkey).is_err() {
+            ah::bail!("rate-limit: too many attempts to transmit event by the same author");
+        }
+
+        {
+            let seen = self.seen_event_ids.upgradable_read();
+            if seen.contains(&event.id) {
+                ah::bail!("rate-limit: too many attempts to transmit the same event");
+            } else {
+                let mut seen = RwLockUpgradableReadGuard::<'_, _, _>::upgrade(seen);
+                seen.put(event.id, ());
+            }
+        }
+
+        self.inner.check_event(event)?;
         Ok(())
     }
 

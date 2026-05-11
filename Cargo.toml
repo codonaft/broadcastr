@@ -31,6 +31,7 @@ mime = "0.3"
 nonzero_ext = "0.3"
 nostr = { git = "https://github.com/alopatindev/nostr", rev = "a9c38d1e098153cd8a63c44b08b619c1e4480508" }
 nostr-sdk = { git = "https://github.com/alopatindev/nostr", rev = "a9c38d1e098153cd8a63c44b08b619c1e4480508" }
+parking_lot = "0.12"
 reqwest = { version = "0.13", features = ["json", "socks"] }
 rustls = { version = "0.23", features = ["ring"] }
 simplelog = "0.12"

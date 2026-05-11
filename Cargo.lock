@@ -233,6 +233,7 @@ dependencies = [
  "nonzero_ext",
  "nostr",
  "nostr-sdk",
+ "parking_lot",
  "reqwest",
  "rustls",
  "simplelog",

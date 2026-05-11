@@ -541,15 +541,18 @@ impl Relays {
         found_on_relays: IndexSet<RelayUrl>,
         retry: usize,
     ) -> ah::Result<()> {
-        let mut seen_pubkeys = this.seen_pubkeys.lock().await;
         let mut pubkeys = HashSet::default();
-        for i in iter::once(event.pubkey).chain(event.tags.public_keys().copied()) {
-            seen_pubkeys.put(i, Default::default());
-            pubkeys.insert(i);
-        }
 
-        this.update_relays(UpdateMode::PartialGossipUpdate, &mut seen_pubkeys)
-            .await?;
+        {
+            let mut seen_pubkeys = this.seen_pubkeys.lock().await;
+            for i in iter::once(event.pubkey).chain(event.tags.public_keys().copied()) {
+                seen_pubkeys.put(i, Default::default());
+                pubkeys.insert(i);
+            }
+
+            this.update_relays(UpdateMode::PartialGossipUpdate, &mut seen_pubkeys)
+                .await?;
+        }
 
         let event_id = event.id;
         let QueryEvent {
@@ -634,7 +637,6 @@ impl Relays {
                         newest_event.id
                     );
 
-                    drop(seen_pubkeys);
                     Box::pin(Self::handle_event(
                         this,
                         newest_event,
@@ -660,8 +662,6 @@ impl Relays {
             )
             .await;
         }
-
-        drop(seen_pubkeys);
         Ok(())
     }
 

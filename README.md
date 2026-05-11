@@ -49,7 +49,7 @@ broadcastr \
 <p>
 
 ```
-Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--block-ttl <block-ttl>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-protect] [--no-gossip-discovery] [--no-nip66-discovery] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--relay-info <relay-info>] [--redirect <redirect>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
+Usage: broadcastr --listen <listen> [--relays <relays>] [--read-relays <read-relays>] [--block-relays <block-relays>] [--block-ttl <block-ttl>] [--kinds <kinds>] [--pubkeys <pubkeys>] [--no-mentions] [--subscribe] [--no-protect] [--no-gossip-discovery] [--no-nip66-discovery] [--no-azzamo] [--tor-proxy <tor-proxy>] [--proxy <proxy>] [--log-level <log-level>] [--max-relays <max-relays>] [--max-events-by-author-per-min <max-events-by-author-per-min>] [--max-events-by-ip-per-min <max-events-by-ip-per-min>] [--max-events-per-min <max-events-per-min>] [--min-pow <min-pow>] [--max-tags <max-tags>] [--update-interval <update-interval>] [--max-backoff-interval <max-backoff-interval>] [--connect-timeout <connect-timeout>] [--request-timeout <request-timeout>] [--relay-info <relay-info>] [--redirect <redirect>] [--max-msg-size <max-msg-size>] [--tcp-backlog <tcp-backlog>] [--max-frame-size <max-frame-size>]
 
 Broadcast Nostr events to other relays
 
@@ -88,6 +88,8 @@ Options:
                     limit events by author (default is 5)
   --max-events-by-ip-per-min
                     limit events by IP (default is 50)
+  --max-events-per-min
+                    limit all events (default is 1000)
   --min-pow         proof of work difficulty limit
   --max-tags        max tags allowed for non-kind-3 events (default is 32)
   --update-interval relays and spam-lists update interval (default is 15m)
@@ -189,8 +191,6 @@ http {
   - disallow for NIP-59 and NIP-70?
 - [x] per relay event kind allow-list
 - [x] find newest replaceable and addressable events and broadcast them instead
-- [ ] batch events received from WS?
-  - query them using a single REQ filter
 - [ ] act as a proxy?
   - as a RAM-cached proxy for all transmitted events?
   - as a proxy to a list of relays?

@@ -21,6 +21,7 @@ use reqwest::{ClientBuilder, Proxy, Url};
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
+    cmp,
     net::SocketAddr,
     num::{NonZeroU32, NonZeroUsize},
     str::FromStr,
@@ -131,6 +132,10 @@ struct Broadcastr {
     #[argh(option, default = "nonzero!(50u32)")]
     max_events_by_ip_per_min: NonZeroU32,
 
+    /// limit all events (default is 1000)
+    #[argh(option, default = "nonzero!(1000u32)")]
+    max_events_per_min: NonZeroU32,
+
     /// proof of work difficulty limit
     #[argh(option)]
     min_pow: Option<u8>,
@@ -210,6 +215,18 @@ async fn main() -> ah::Result<()> {
 
     if args.update_interval.0 < args.connect_timeout.0 + args.request_timeout.0 {
         ah::bail!("--update-interval should be greater than --connect-timeout + --request-timeout");
+    }
+
+    if args.max_events_per_min
+        < cmp::max(
+            args.max_events_by_author_per_min,
+            args.max_events_by_ip_per_min,
+        )
+    {
+        ah::bail!(
+            "--max-events-per-min must be greater than max(--max-events-by-author-per-min, \
+             --max-events-by-ip-per-min)"
+        )
     }
 
     if args.no_mentions && args.pubkeys.is_none() {
