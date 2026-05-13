@@ -14,15 +14,16 @@ use indexmap::{IndexMap, IndexSet};
 use itertools::{Either, Itertools};
 use lru::LruCache;
 use nostr::{
-    Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, TagStandard, Timestamp,
-    event::TagKind,
+    Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, Timestamp,
+    event::tag::TagCodec,
     filter::{MatchEventOptions, SingleLetterTag},
-    nips::nip11::RelayInformationDocument,
+    nips::{nip11::RelayInformationDocument, nip66::Nip66Tag},
     serde_json,
     util::JsonUtil,
 };
 use nostr_sdk::{
-    client::{Client as NostrClient, Connection, GossipConfig, GossipRelayLimits},
+    client::{Client as NostrClient, GossipConfig, GossipRelayLimits},
+    proxy::Proxy,
     relay::{Error as RelayError, RelayEventLimits, RelayLimits, RelayStatus, ReqExitPolicy},
 };
 use reqwest::{Client as HttpClient, Url, header};
@@ -42,7 +43,7 @@ use tokio::{
 
 const RELAY_CAPABILITY: SingleLetterTag = SingleLetterTag::uppercase(Alphabet::R);
 const RELAY_NETWORK_TYPE: SingleLetterTag = SingleLetterTag::lowercase(Alphabet::N);
-const LABEL: TagKind = TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::L));
+const LABEL: SingleLetterTag = SingleLetterTag::lowercase(Alphabet::L);
 
 const MAX_CONCURRENT_FAILURE_CHECKS: usize = 4;
 const FATAL_CONNECTION_ERRORS: [&str; 7] = [
@@ -451,15 +452,18 @@ impl Relays {
                     if let Ok(event) = stream_event
                         && event.kind == EventKind::RelayDiscovery
                         && !this.args.no_nip66_discovery
-                        && let Some(Ok(url)) = event.tags.identifier().map(RelayUrl::parse)
+                        && let Some(Ok(url)) =
+                            event.tags.identifier().as_deref().map(RelayUrl::parse)
                         && !relay_lists.contains(&url)
                         && (this.maybe_can_connect_to_tor() || !url.is_onion())
                     {
-                        if event.tags.filter(LABEL).any(|t| {
-                            t.as_slice()
-                                .get(1)
-                                .map(|t| t.to_lowercase().contains("cloudflare"))
-                                .unwrap_or_default()
+                        if event.tags.iter().any(|t| {
+                            // TODO
+                            t.single_letter_tag() == Some(LABEL)
+                                && t.as_slice()
+                                    .get(1)
+                                    .map(|t| t.to_lowercase().contains("cloudflare"))
+                                    .unwrap_or_default()
                         }) {
                             discovered_bot_unfriendly.insert(url);
                         } else {
@@ -525,7 +529,7 @@ impl Relays {
         tokio::spawn(async move {
             if !this.args.no_mentions
                 && let Some(nostr_utils::PublicKeys(authors)) = &this.args.pubkeys
-                && event.tags.public_keys().any(|p| authors.contains(p))
+                && event.tags.public_keys().any(|p| authors.contains(&p))
                 && let Err(e) = check_possible_spam(&event).await
             {
                 log::error!("possible spam check failure: {e}");
@@ -546,7 +550,7 @@ impl Relays {
 
         {
             let mut seen_pubkeys = this.seen_pubkeys.lock().await;
-            for i in iter::once(event.pubkey).chain(event.tags.public_keys().copied()) {
+            for i in iter::once(event.pubkey).chain(event.tags.public_keys()) {
                 seen_pubkeys.put(i, Default::default());
                 pubkeys.insert(i);
             }
@@ -725,9 +729,10 @@ impl Relays {
             {
                 let requirements = relay_discovery
                     .tags
-                    .filter_standardized(TagKind::single_letter(Alphabet::R, true))
+                    .into_iter()
+                    .filter_map(|t| Nip66Tag::parse(t.into_iter()).ok())
                     .filter_map(|t| match t {
-                        TagStandard::RelayRequirement(requirement) => Some(requirement),
+                        Nip66Tag::Requirement(requirement) => Some(requirement),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -928,13 +933,14 @@ impl Relays {
             .collect()
     }
 
+    // TODO
     pub(crate) fn maybe_can_connect_to_tor(&self) -> bool {
         self.args.tor_proxy.is_some() || self.args.proxy.is_some()
     }
 }
 
 impl RelaysAndSenders {
-    pub(crate) fn new(args: &Broadcastr, connection: Connection) -> ah::Result<Self> {
+    pub(crate) fn new(args: &Broadcastr) -> ah::Result<Self> {
         let relay_lists = Arc::new(RwLock::new(RelayLists::default()));
         let (azzamo_block_pubkeys_sender, azzamo_block_pubkeys_receiver) =
             watch::channel(HashSet::default());
@@ -966,8 +972,20 @@ impl RelaysAndSenders {
             })
             .relay_limits(relay_limits)
             .max_relays(args.max_relays)
-            .connection(connection)
-            // .ban_relay_on_mismatch(true) // TODO: https://github.com/rust-nostr/nostr/pull/1349
+            .proxy(Proxy::custom({
+                let tor_proxy = args.tor_proxy;
+                let proxy = args.proxy;
+                move |relay_url| {
+                    if relay_url.is_localhost() || relay_url.is_local_addr() {
+                        None
+                    } else if relay_url.is_onion() {
+                        tor_proxy
+                    } else {
+                        proxy
+                    }
+                }
+            }))
+            .ban_relay_on_mismatch(true)
             .admit_policy(policy.clone())
             .build();
 

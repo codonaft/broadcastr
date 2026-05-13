@@ -15,14 +15,13 @@ use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
 use nostr::{Kind as EventKind, serde_json, types::Timestamp};
-use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
 use rustls::crypto;
 use simplelog::{ColorChoice, TermLogger, TerminalMode};
 use std::{
     cmp,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     str::FromStr,
     sync::{Arc, OnceLock},
@@ -284,20 +283,10 @@ async fn main() -> ah::Result<()> {
         .max_message_size(Some(ws_message_size))
         .max_frame_size(Some(args.max_frame_size as usize));
 
-    // TODO: https://github.com/rust-nostr/nostr/issues/1350
-    let connection = Connection::new();
-    let connection = if let Some(proxy) = args.proxy {
-        connection.proxy(proxy).target(ConnectionTarget::All)
-    } else if let Some(tor_proxy) = args.tor_proxy {
-        connection.proxy(tor_proxy).target(ConnectionTarget::Onion)
-    } else {
-        connection
-    };
-
     let RelaysAndSenders {
         relays,
         azzamo_block_pubkeys_sender,
-    } = RelaysAndSenders::new(&args, connection)?;
+    } = RelaysAndSenders::new(&args)?;
 
     Toplevel::new({
         let nostr_client = relays.nostr_client.clone();
@@ -415,20 +404,20 @@ fn proxied_client_builder(args: &Broadcastr) -> ah::Result<ClientBuilder> {
     let client = ClientBuilder::new()
         .user_agent(USER_AGENT)
         .connect_timeout(args.connect_timeout.0)
-        .timeout(args.request_timeout.0);
-    let client = if let Some(proxy) = args.proxy {
-        client.proxy(Proxy::all(socks5(proxy)).map_err(ah::Error::from)?)
-    } else if let Some(tor_proxy) = args.tor_proxy {
-        client.proxy(Proxy::custom(move |url| {
-            if is_onion(url) {
-                Some(socks5(tor_proxy))
-            } else {
-                None
+        .timeout(args.request_timeout.0)
+        .proxy(Proxy::custom({
+            let tor_proxy = args.tor_proxy;
+            let proxy = args.proxy;
+            move |url| {
+                if is_local(url) {
+                    None
+                } else if is_onion(url) {
+                    tor_proxy.map(socks5)
+                } else {
+                    proxy.map(socks5)
+                }
             }
-        }))
-    } else {
-        client
-    };
+        }));
     Ok(client)
 }
 
@@ -446,6 +435,23 @@ fn now() -> Duration {
 
 fn is_onion(url: &Url) -> bool {
     url.domain().is_some_and(|host| host.ends_with(".onion"))
+}
+
+fn is_local(url: &Url) -> bool {
+    if let Some(host) = url.host_str() {
+        if host == "localhost" {
+            return true;
+        }
+
+        if let Ok(addr) = IpAddr::from_str(host) {
+            return match addr {
+                IpAddr::V4(ipv4) => ipv4.is_loopback() || ipv4.is_private(),
+                IpAddr::V6(ipv6) => ipv6.is_loopback(),
+            };
+        }
+    }
+
+    false
 }
 
 impl FromStr for Urls {

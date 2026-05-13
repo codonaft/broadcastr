@@ -257,7 +257,7 @@ impl RelayLists {
                     .into_iter()
                     .reduce(u64::max),
             );
-            for (relay_url, _) in nip65::extract_owned_relay_list(event) {
+            for (relay_url, _) in nip65::extract_relay_list(&event) {
                 if !block.contains(&relay_url)
                     && let Some(urls) = author_to_relays.get_mut(&pubkey)
                 {

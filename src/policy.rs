@@ -213,7 +213,7 @@ impl InnerPolicy {
             && event
                 .tags
                 .public_keys()
-                .find(|i| self.pubkeys.contains(*i))
+                .find(|i| self.pubkeys.contains(i))
                 .is_some()
     }
 
