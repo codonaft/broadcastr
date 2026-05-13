@@ -14,7 +14,7 @@ use git_version::git_version;
 use indexmap::IndexSet;
 use log::LevelFilter;
 use nonzero_ext::*;
-use nostr::{serde_json, types::Timestamp};
+use nostr::{Kind as EventKind, serde_json, types::Timestamp};
 use nostr_sdk::client::{Connection, ConnectionTarget};
 use policy::Policy;
 use reqwest::{ClientBuilder, Proxy, Url};
@@ -207,6 +207,12 @@ async fn main() -> ah::Result<()> {
 
     if args.subscribe && (args.pubkeys.is_none() || args.kinds.is_none()) {
         ah::bail!("--subscribe requires --pubkeys and --kinds");
+    }
+
+    if let Some(nostr_utils::EventKinds(kinds)) = &args.kinds
+        && (kinds.contains(&EventKind::Seal) || kinds.contains(&EventKind::GiftWrap))
+    {
+        ah::bail!("event kinds 13 and 1059 are not supported");
     }
 
     if !args.subscribe && args.no_protect {

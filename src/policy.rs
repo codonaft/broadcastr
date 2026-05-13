@@ -149,10 +149,8 @@ impl InnerPolicy {
     }
 
     fn check_event(&self, event: &Event) -> ah::Result<()> {
-        if let Some(min_pow) = self.min_pow
-            && !event.check_pow(min_pow)
-        {
-            ah::bail!("unexpected pow < {min_pow}");
+        if event.kind == EventKind::Seal || event.kind == EventKind::GiftWrap {
+            ah::bail!("event kinds 13 and 1059 are not supported");
         }
 
         if event.created_at
@@ -163,6 +161,12 @@ impl InnerPolicy {
             )
         {
             ah::bail!("event from the future");
+        }
+
+        if let Some(min_pow) = self.min_pow
+            && !event.check_pow(min_pow)
+        {
+            ah::bail!("unexpected pow < {min_pow}");
         }
 
         if ((!self.no_gossip_discovery && event.kind == EventKind::RelayList)
