@@ -53,7 +53,7 @@ static REDIRECT: OnceLock<Bytes> = OnceLock::new();
 struct Broadcastr {
     /// the listener ws URI (e.g. "ws://localhost:8080")
     #[argh(option)]
-    listen: Url,
+    listen: Option<Url>,
 
     /// relays or relay-list URIs in a descending order of priority
     /// (comma-separated, optionally with per relay event kind allow-list,
@@ -201,6 +201,10 @@ async fn main() -> ah::Result<()> {
         ah::bail!("either --relays or --read-relays required");
     }
 
+    if args.listen.is_none() && !args.subscribe {
+        ah::bail!("either --listen or --subscribe required");
+    }
+
     if args.subscribe && (args.pubkeys.is_none() || args.kinds.is_none()) {
         ah::bail!("--subscribe requires --pubkeys and --kinds");
     }
@@ -304,7 +308,7 @@ async fn main() -> ah::Result<()> {
             s.start(SubsystemBuilder::new(
                 "main",
                 async move |subsys: &mut SubsystemHandle| {
-                    let listeners = new_listeners(&args).await?.into_iter().map({
+                    let listeners = maybe_new_listeners(&args).await?.into_iter().map({
                         let relays = relays.clone();
                         move |listener| serve(listener, ws_config, relays.clone()).boxed()
                     });
@@ -364,33 +368,35 @@ async fn serve(
     }
 }
 
-async fn new_listeners(args: &Broadcastr) -> ah::Result<Vec<TcpListener>> {
+async fn maybe_new_listeners(args: &Broadcastr) -> ah::Result<Vec<TcpListener>> {
     let mut result = vec![];
-    for listen_addr in args.listen.socket_addrs(|| None)? {
-        let domain = match listen_addr {
-            SocketAddr::V4(_) => socket2::Domain::IPV4,
-            SocketAddr::V6(_) => socket2::Domain::IPV6,
-        };
-        let socket =
-            socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
+    if let Some(listen) = &args.listen {
+        for listen_addr in listen.socket_addrs(|| None)? {
+            let domain = match listen_addr {
+                SocketAddr::V4(_) => socket2::Domain::IPV4,
+                SocketAddr::V6(_) => socket2::Domain::IPV6,
+            };
+            let socket =
+                socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
 
-        if listen_addr.is_ipv6() {
-            socket.set_only_v6(true)?;
+            if listen_addr.is_ipv6() {
+                socket.set_only_v6(true)?;
+            }
+            socket.set_reuse_address(true)?;
+
+            #[cfg(unix)]
+            socket.set_reuse_port(true)?;
+
+            socket.bind(&listen_addr.into())?;
+            socket.listen(args.tcp_backlog)?;
+
+            let std_listener: std::net::TcpListener = socket.into();
+            std_listener.set_nonblocking(true)?;
+            let listener = TcpListener::from_std(std_listener)?;
+
+            log::info!("listening on {listen_addr}");
+            result.push(listener);
         }
-        socket.set_reuse_address(true)?;
-
-        #[cfg(unix)]
-        socket.set_reuse_port(true)?;
-
-        socket.bind(&listen_addr.into())?;
-        socket.listen(args.tcp_backlog)?;
-
-        let std_listener: std::net::TcpListener = socket.into();
-        std_listener.set_nonblocking(true)?;
-        let listener = TcpListener::from_std(std_listener)?;
-
-        log::info!("listening on {listen_addr}");
-        result.push(listener);
     }
     Ok(result)
 }
