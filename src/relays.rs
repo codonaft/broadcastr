@@ -373,17 +373,18 @@ impl Relays {
         };
 
         if free_pool_entries > 0 {
-            let restored = this
-                .facts
-                .read()
-                .await
-                .found_relevant_event
-                .iter()
-                .map(|(i, _)| i)
-                .filter(|&i| !client_relays.contains(i))
-                .take(free_pool_entries)
-                .cloned()
-                .collect::<IndexSet<RelayUrl>>();
+            let restored = {
+                this.facts
+                    .read()
+                    .await
+                    .found_relevant_event
+                    .iter()
+                    .map(|(i, _)| i)
+                    .filter(|&i| !client_relays.contains(i))
+                    .take(free_pool_entries)
+                    .cloned()
+                    .collect::<IndexSet<RelayUrl>>()
+            };
 
             if !restored.is_empty() {
                 log::info!("restored {} relays", restored.len());
@@ -688,6 +689,14 @@ impl Relays {
                 return Ok(());
             }
 
+            {
+                this.facts
+                    .write()
+                    .await
+                    .seen_relay_info_after_failure
+                    .insert(relay_url.clone());
+            }
+
             let connect_timeout = this.args.connect_timeout.0;
             let connected_relay = tokio::spawn({
                 async move {
@@ -700,6 +709,7 @@ impl Relays {
             let mut has_limitation = false;
             let mut has_requirements = false;
             let mut has_info_from_discovery = false;
+
             if let Some(relay_discovery) = this
                 .nostr_client
                 .fetch_events(
@@ -713,14 +723,6 @@ impl Relays {
                 .ok()
                 .and_then(|i| i.first_owned())
             {
-                {
-                    this.facts
-                        .write()
-                        .await
-                        .seen_relay_info_after_failure
-                        .insert(relay_url.clone());
-                }
-
                 let requirements = relay_discovery
                     .tags
                     .filter_standardized(TagKind::single_letter(Alphabet::R, true))
@@ -907,6 +909,7 @@ impl Relays {
         log::debug!("blocking {relay_url} due to {reason}");
         let mut lock = self.facts.write().await;
         lock.found_relevant_event.pop(relay_url);
+        lock.seen_relay_info_after_failure.remove(relay_url);
         self.policy.block_relay(relay_url).await;
         drop(lock);
     }
