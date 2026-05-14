@@ -16,7 +16,7 @@ Vendor lock-free stateless alternative to [blastr](https://github.com/MutinyWall
     - [PoW](https://github.com/nostr-protocol/nips/blob/master/13.md)
 - [gossip](https://mikedilger.com/gossip-model/)
 - subscribe to events (of particular authors and event kinds) and distribute them automatically
-    - ignores [protected](https://github.com/nostr-protocol/nips/blob/master/70.md) events by default
+    - won't transmit [protected](https://github.com/nostr-protocol/nips/blob/master/70.md) events by default
 - tor/onion relays
 - relays ignore list
 - minimizes the risk of being rate-limited by relays
@@ -202,11 +202,12 @@ http {
         - the reports/mute-lists might not be [trustworthy](https://nostrudel.ninja/u/nprofile1qqs8wakr9493685t725kh2ltgwke4hs400fk8kymslak8eh3g42c3zqx0vsmr/muted-by), but happened due to some interpersonal conflict
         - if it's a new event—there will not be any reports yet
             - put possibly spammy events to quarantine period and recheck later before transmitting?
-        - [ ] check whether it was labeled by a trusted spam detector bot?
+        - [ ] check whether it was labeled by a trusted spam [detector bot](https://nosotros.app/nprofile1qyw8wumn8ghj76r0w3exjemgw3hx7aewdehhxarjxyhxxmmdqyfhwumn8ghj7ur4wfc82unp9e3kcmm4vsq3jamnwvaz7tmtdehhxarj9ehx2at5wf5kuefwvdhk6qgkwaehxw309aex2mrp0yh8qunfd4skctnwv46qqgyggdm2rrcx6ev20tlpcssxlucdkjgvqw8lhnd62fure6nl2aufk56ftges)?
     - [ ] check the age of the stranger?
         - count their public posts and comments?
     - check trust rank?
     - in [this](https://primal.net/e/nevent1qqsqqq9wtsygcdjn7anyyatgx04fk5kaurt7ka029d5uvzfzzpp6p2sgz7dc6) example, allow event `6cb47b0680acb9ec08cce944a1350de030e3be63e402d2eaec01805de757a41a` but not `0000ae5c088c3653f76642756833ea9b52dde0d7eb75ea2b69c609221043a0aa`
+        - spammy events [can be](https://nosotros.app/nevent1qvzqqqqqqypzqnyqqft6tz9g9pyaqjvp0s4a4tvcfvj6gkke7mddvmj86w68uwe0qy28wumn8ghj7un9d3shjtnyv9kh2uewd9hsqgphcfm3nsqqfqv72p6mzvvrtm0wf80zxh5rdn3yc5sxu45cvej0mvpz886t) shared by legit npubs
 - [ ] act as a proxy for REQs?
   - a RAM-cached proxy for all transmitted events?
   - a proxy to a list of relays?

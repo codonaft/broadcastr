@@ -51,6 +51,7 @@ pub(crate) async fn handle_ws_connection(
         .context("HTTP response")?;
         stream.write_all(response).await?;
         stream.flush().await?;
+        stream.shutdown().await?;
         return Ok(());
     }
 
@@ -73,24 +74,37 @@ pub(crate) async fn handle_ws_connection(
     .await
     .context("accept_async_with_config")?;
 
+    let mut failed = false;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-    while let Some(Ok(Message::Text(text))) = ws_receiver.next().await {
-        match ClientMessage::from_json(&text) {
-            Ok(client_message) => {
-                handle_client_message(client_message, ip, &mut ws_sender, relays.clone()).await;
+    while let Some(message) = ws_receiver.next().await {
+        if failed {
+            continue;
+        }
+
+        match message {
+            Ok(Message::Text(text)) => match ClientMessage::from_json(&text) {
+                Ok(client_message) => {
+                    handle_client_message(client_message, ip, &mut ws_sender, relays.clone()).await;
+                },
+                Err(e) => {
+                    log::debug!("failed to parse client message: {e}");
+                    failed = true;
+                },
             },
             Err(e) => {
-                log::debug!("failed to parse client message: {e}");
-                break;
+                log::debug!("failed to parse ws message: {e}");
+                failed = true;
             },
+            _ => (),
         }
     }
 
-    let _ = ws_sender
-        .close()
+    let mut ws_stream = ws_sender.reunite(ws_receiver)?;
+    let _ = ws_stream
+        .close(None)
         .await
-        .context("ws_sender.close")
-        .inspect_err(|e| log::error!("{e}"));
+        .context("ws_stream.close")
+        .inspect_err(|e| log::debug!("{e}"));
     log::debug!("closed connection with client");
     Ok(())
 }
@@ -265,7 +279,7 @@ async fn send_relay_message(
             .into(),
     );
     ws_sender.send(text).await.context("ws_sender.send")?;
-    ws_sender.flush().await?;
+    ws_sender.flush().await.context("ws_sender.flush")?;
     Ok(())
 }
 

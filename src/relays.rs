@@ -730,7 +730,7 @@ impl Relays {
                 let requirements = relay_discovery
                     .tags
                     .into_iter()
-                    .filter_map(|t| Nip66Tag::parse(t.into_iter()).ok())
+                    .filter_map(|t| Nip66Tag::parse(t).ok())
                     .filter_map(|t| match t {
                         Nip66Tag::Requirement(requirement) => Some(requirement),
                         _ => None,
@@ -751,11 +751,15 @@ impl Relays {
 
                 has_requirements = !requirements.is_empty();
                 has_info_from_discovery = info_from_discovery.is_ok();
+            } else {
+                log::debug!("relay info for {relay_url} not found");
             }
 
             if !has_limitation && !has_requirements && !has_info_from_discovery {
                 let relay = connected_relay.await?;
-                if relay.status() != RelayStatus::Connected {
+                if relay.status() == RelayStatus::Connected {
+                    log::debug!("still connected to relay {relay_url}");
+                } else {
                     log::debug!("requesting relay info for {relay_url}");
                     let mut url = relay_url.as_str().parse::<Url>()?;
                     url.set_scheme(match url.scheme() {
@@ -802,6 +806,7 @@ impl Relays {
             }
 
             if has_limitation {
+                log::debug!("relay {relay_url} is limited");
                 this.block_if_no_events_with_same_author(&relay_url, event)
                     .await?;
             }
@@ -848,6 +853,7 @@ impl Relays {
             .is_some();
 
         if found_event_with_same_author {
+            log::debug!("found relevant event on {relay_url}");
             self.facts
                 .write()
                 .await
