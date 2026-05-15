@@ -9,17 +9,13 @@ use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 use lru::LruCache;
 use nostr::{
-    Kind as EventKind, Timestamp,
-    filter::{Filter, MatchEventOptions},
-    key::PublicKey,
-    nips::nip65,
-    serde_json,
+    Kind as EventKind, Timestamp, filter::Filter, key::PublicKey, nips::nip65, serde_json,
     types::RelayUrl,
 };
 use reqwest::Url;
 use std::{fs::File, num::NonZeroUsize, ops::Sub, time::Duration};
 
-pub(crate) const MAX_SEEN_AUTHORS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+pub(crate) const MAX_GOSSIP_USERS: NonZeroUsize = NonZeroUsize::new(5).unwrap();
 pub(crate) const MAX_GOSSIP_RELAYS_PER_USER: usize = 5;
 
 #[derive(Debug, Clone, Default)]
@@ -41,7 +37,7 @@ impl RelayLists {
     pub(crate) async fn update(
         relays: &Relays,
         mode: UpdateMode,
-        seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
+        gossip: &mut LruCache<PublicKey, RelayListCreatedAt>,
     ) -> ah::Result<Self> {
         let now = now();
         let old = {
@@ -135,14 +131,9 @@ impl RelayLists {
             .sub(&read)
             .sub(&relays_with_unmatched_allowed_kinds);
 
-        let author_to_relays = Self::fetch_gossip_relays(
-            relays,
-            &block_relays,
-            mode,
-            seen_pubkeys,
-            old.author_to_relays,
-        )
-        .await?;
+        let author_to_relays =
+            Self::fetch_gossip_relays(relays, &block_relays, mode, gossip, old.author_to_relays)
+                .await?;
 
         let outdated = relays
             .client_relays()
@@ -171,7 +162,7 @@ impl RelayLists {
         relays: &Relays,
         block: &IndexSet<RelayUrl>,
         mode: UpdateMode,
-        seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
+        gossip: &mut LruCache<PublicKey, RelayListCreatedAt>,
         mut old_gossip: IndexMap<PublicKey, IndexSet<RelayUrl>>,
     ) -> ah::Result<IndexMap<PublicKey, IndexSet<RelayUrl>>> {
         if mode == UpdateMode::InitializeRelays || relays.args.no_gossip_discovery {
@@ -192,7 +183,7 @@ impl RelayLists {
             .0
             .iter()
             .copied()
-            .chain(seen_pubkeys.iter().map(|(i, _)| *i))
+            .chain(gossip.iter().map(|(i, _)| *i))
             .collect::<IndexSet<_>>();
 
         let mut author_to_relays = authors
@@ -215,43 +206,39 @@ impl RelayLists {
 
         let interval = relays.args.update_interval.0.as_secs();
         let now = Timestamp::now().as_secs();
-        let since = seen_pubkeys
-            .iter()
-            .map(|(_, i)| i.to_u64().saturating_add(1))
-            .reduce(u64::min)
-            .unwrap_or_default()
-            .into();
         let filter = Filter::new()
-            .since(since)
-            .until(Timestamp::from_secs(now.saturating_add(interval)))
+            .limit(1)
             .kind(EventKind::RelayList)
-            .authors(authors.iter().copied());
+            .until(Timestamp::from_secs(now.saturating_add(interval)));
+        let filters = authors
+            .iter()
+            .map(|a| {
+                let f = filter.clone().author(*a);
+                if let Some(since) = gossip.get(a).map(|i| i.to_u64().saturating_add(1)) {
+                    f.since(since.into())
+                } else {
+                    f
+                }
+            })
+            .collect::<Vec<_>>();
 
         for event in relays
             .nostr_client
-            .fetch_events(filter.clone())
+            .fetch_events(filters)
             .timeout(relays.args.request_timeout.0)
             .await
             .context("fetch gossip")?
             .into_iter()
             .chunk_by(|e| e.pubkey)
             .into_iter()
-            .flat_map(|(_, events)| {
-                events
-                    .into_iter()
-                    .filter(|e| filter.match_event(e, MatchEventOptions::default()))
-                    .max_by_key(|e| e.created_at)
-                    .into_iter()
-            })
+            .flat_map(|(_, events)| events.into_iter().max_by_key(|e| e.created_at).into_iter())
         {
             log::debug!("gossip event={event:?}");
             let pubkey = event.pubkey;
-            if !seen_pubkeys.contains(&pubkey) {
-                seen_pubkeys.put(pubkey, Default::default());
+            if !gossip.contains(&pubkey) {
+                gossip.put(pubkey, Default::default());
             }
-            let entry = seen_pubkeys
-                .get_mut(&pubkey)
-                .context("seen_pubkeys entry")?;
+            let entry = gossip.get_mut(&pubkey).context("gossip entry")?;
             *entry = RelayListCreatedAt::new(
                 [entry.to_u64(), event.created_at.as_secs()]
                     .into_iter()

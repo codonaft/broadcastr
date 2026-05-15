@@ -176,6 +176,10 @@ impl InnerPolicy {
             return Ok(());
         }
 
+        if !self.no_mentions && event.kind == EventKind::Metadata {
+            return Ok(());
+        }
+
         if !self.kinds.is_empty() && !self.kinds.contains(&event.kind) {
             ah::bail!("unexpected kind {}", event.kind);
         } else if !self.pubkeys.is_empty() {

@@ -69,8 +69,8 @@ Options:
                     "0,1,3,5,6,7,4550,34550")
   --pubkeys         allow authors or mentioned authors only (comma-separated
                     hex/bech32/NIP-21 allow-list)
-  --no-mentions     disallow mentions of the allowed authors' events or events
-                    with the authors' replies
+  --no-mentions     disallow mentions of the allowed authors' events and events
+                    that the authors have mentioned
   --subscribe       subscribe and automatically distribute all allowed events
                     (including mentions)
   --no-protect      ignore NIP-70 protection tag for the automatically

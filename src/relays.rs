@@ -3,21 +3,22 @@ use crate::{
     nostr_utils::{self, APPLICATION_NOSTR_JSON, has_publish_limitation},
     policy::InnerPolicy,
     proxied_client_builder,
-    relay_lists::{MAX_SEEN_AUTHORS, RelayLists},
+    relay_lists::{MAX_GOSSIP_USERS, RelayLists},
     spam::check_possible_spam,
 };
 use anyhow::{self as ah, Context};
 use backon::{BackoffBuilder, Retryable};
-use core::convert::From;
+use core::{convert::From, num::NonZeroUsize};
 use futures::{StreamExt, future::join_all};
 use indexmap::{IndexMap, IndexSet};
 use itertools::{Either, Itertools};
 use lru::LruCache;
 use nostr::{
     Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, Timestamp,
-    event::tag::TagCodec,
-    filter::{MatchEventOptions, SingleLetterTag},
-    nips::{nip11::RelayInformationDocument,
+    event::{EventId, tag::TagCodec},
+    filter::SingleLetterTag,
+    nips::{
+        nip11::RelayInformationDocument,
         nip66::{Nip66Tag, Requirement},
     },
     serde_json,
@@ -47,7 +48,7 @@ const RELAY_CAPABILITY: SingleLetterTag = SingleLetterTag::uppercase(Alphabet::R
 const RELAY_NETWORK_TYPE: SingleLetterTag = SingleLetterTag::lowercase(Alphabet::N);
 const LABEL: SingleLetterTag = SingleLetterTag::lowercase(Alphabet::L);
 
-const MAX_CONCURRENT_FAILURE_CHECKS: usize = 4;
+const MAX_CONCURRENT_HTTP_REQUESTS: usize = 4;
 const FATAL_CONNECTION_ERRORS: [&str; 7] = [
     "dns error",
     "InvalidCertificate",
@@ -63,21 +64,41 @@ const WEEK_SECS: u64 = 7 * Duration::from_hours(24).as_secs();
 
 const NEWEST_EVENT_ATTEMPTS: usize = 3;
 
+const POSSIBLE_SPAMMERS_CACHE: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+
 #[derive(Debug)]
 pub(crate) struct Relays {
     pub nostr_client: NostrClient,
     pub http_client: HttpClient,
+    pub http_client_budget: Semaphore,
     pub args: Broadcastr,
     pub policy: Arc<Policy>,
-    pub seen_pubkeys: Arc<Mutex<LruCache<PublicKey, RelayListCreatedAt>>>,
-    pub facts: RwLock<RelayFacts>,
-    pub relays_failure_budget: Semaphore,
+    pub gossip: Arc<Mutex<LruCache<PublicKey, RelayListCreatedAt>>>,
+    pub facts: RwLock<Facts>,
 }
 
 #[derive(Debug)]
-pub(crate) struct RelayFacts {
+pub(crate) struct Facts {
     pub found_relevant_event: LruCache<RelayUrl, ()>,
     pub seen_relay_info_after_failure: HashSet<RelayUrl>,
+    pub author_to_contact_list: HashMap<PublicKey, (HashSet<PublicKey>, Timestamp)>,
+    pub possible_spammers: LruCache<PublicKey, bool>,
+    pub events_metadata: HashMap<EventId, EventMetadata>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EventMetadata {
+    pub created_at: Timestamp,
+    pub time_to_read: Duration,
+}
+
+impl EventMetadata {
+    pub(crate) fn new(event: &Event) -> Self {
+        Self {
+            created_at: event.created_at,
+            time_to_read: Duration::from_secs_f64(event.content.len() as f64 * 0.04),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -108,11 +129,11 @@ struct QueryEvent {
 impl Relays {
     pub(crate) async fn run(this: Arc<Self>) -> ah::Result<()> {
         {
-            let mut seen_pubkeys = this.seen_pubkeys.lock().await;
+            let mut gossip = this.gossip.lock().await;
             let mut intervals = backoff(&this.args).build();
 
             for mode in [UpdateMode::InitializeRelays, UpdateMode::InitializeGossip] {
-                while let Err(e) = Self::maybe_init(this.clone(), mode, &mut seen_pubkeys).await {
+                while let Err(e) = Self::maybe_init(this.clone(), mode, &mut gossip).await {
                     log::error!("initialization failure: {e}");
                     sleep(intervals.next().context("backoff")?).await;
                 }
@@ -138,15 +159,13 @@ impl Relays {
     async fn maybe_init(
         this: Arc<Self>,
         mode: UpdateMode,
-        seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
+        gossip: &mut LruCache<PublicKey, RelayListCreatedAt>,
     ) -> ah::Result<()> {
-        if let UpdateMode::InitializeGossip = mode
-            && !this.args.no_gossip_discovery
-        {
+        if mode == UpdateMode::InitializeGossip && !this.args.no_gossip_discovery {
             return Ok(());
         }
 
-        if let Err(e) = this.update_relays(mode, seen_pubkeys).await {
+        if let Err(e) = this.update_relays(mode, gossip).await {
             log::error!("failed to update relays: {e}");
         }
         Self::update_subscriptions(this, mode, WARMUP).await
@@ -154,10 +173,10 @@ impl Relays {
 
     async fn update(this: Arc<Self>, mode: UpdateMode) -> ah::Result<()> {
         {
-            let seen_pubkeys = this.seen_pubkeys.clone();
-            let mut seen_pubkeys = seen_pubkeys.lock().await;
+            let gossip = this.gossip.clone();
+            let mut gossip = gossip.lock().await;
 
-            if let Err(e) = this.update_relays(mode, &mut seen_pubkeys).await {
+            if let Err(e) = this.update_relays(mode, &mut gossip).await {
                 log::error!("failed to update relays: {e}");
             }
         }
@@ -169,7 +188,7 @@ impl Relays {
     async fn update_relays(
         &self,
         mode: UpdateMode,
-        seen_pubkeys: &mut LruCache<PublicKey, RelayListCreatedAt>,
+        gossip: &mut LruCache<PublicKey, RelayListCreatedAt>,
     ) -> ah::Result<()> {
         log::info!("updating relays mode {mode:?}");
 
@@ -180,7 +199,7 @@ impl Relays {
             author_to_relays,
             outdated,
             relay_to_kinds,
-        } = RelayLists::update(self, mode, seen_pubkeys).await?;
+        } = RelayLists::update(self, mode, gossip).await?;
 
         let current_relay_lists = self.policy.relay_lists();
 
@@ -329,7 +348,7 @@ impl Relays {
                 log::debug!("subscribing to {filters:?}");
                 let mut stream = this
                     .nostr_client
-                    .stream_events(filters.clone())
+                    .stream_events(filters)
                     .timeout(timeout)
                     .policy(policy)
                     .await
@@ -338,25 +357,20 @@ impl Relays {
                 while let Some((stream_relay_url, stream_event)) = stream.next().await {
                     match stream_event {
                         Ok(event) => {
-                            if filters
-                                .iter()
-                                .any(|i| i.match_event(&event, MatchEventOptions::default()))
+                            let event_id = event.id;
+                            let allow_protected = false;
+                            if let Err(e) = Self::spawn_handle_event(
+                                this.clone(),
+                                event,
+                                None,
+                                IndexSet::from([stream_relay_url]),
+                                allow_protected,
+                            )
+                            .await
                             {
-                                let event_id = event.id;
-                                let allow_protected = false;
-                                if let Err(e) = Self::spawn_handle_event(
-                                    this.clone(),
-                                    event,
-                                    None,
-                                    IndexSet::from([stream_relay_url]),
-                                    allow_protected,
-                                )
-                                .await
-                                {
-                                    log::debug!("ignored event {event_id} from subscription: {e}");
-                                } else {
-                                    log::info!("accepted event {event_id} from subscription");
-                                }
+                                log::debug!("ignored event {event_id} from subscription: {e}");
+                            } else {
+                                log::info!("accepted event {event_id} from subscription");
                             }
                         },
                         Err(e) => {
@@ -407,98 +421,184 @@ impl Relays {
             && !this.args.no_nip66_discovery
             && free_pool_entries > 0
         {
-            futures.push(tokio::spawn(async move {
-                log::debug!("discovering relays");
-                let filter = this
-                    .filter_in_update_interval_with_age(match mode {
-                        UpdateMode::InitializeRelays => 2 * WEEK_SECS,
-                        UpdateMode::FirstFullUpdate => WEEK_SECS,
-                        _ => 0,
-                    })
-                    .kind(EventKind::RelayDiscovery)
-                    .custom_tag(RELAY_CAPABILITY, "!auth")
-                    .custom_tag(RELAY_CAPABILITY, "!payment");
-
-                let clearnet = filter.clone().custom_tag(RELAY_NETWORK_TYPE, "clearnet");
-                let ssl = clearnet.clone().custom_tag(RELAY_CAPABILITY, "ssl");
-                let mut filters = vec![clearnet.clone(), ssl.clone()];
-
-                let min_pow = this.args.min_pow.unwrap_or_default();
-                if min_pow == 0 {
-                    filters.extend([
-                        clearnet.custom_tag(RELAY_NETWORK_TYPE, "!pow"),
-                        ssl.custom_tag(RELAY_NETWORK_TYPE, "!pow"),
-                    ]);
-                }
-
-                if this.maybe_can_connect_to_tor() {
-                    let tor = filter.custom_tag(RELAY_NETWORK_TYPE, "tor");
-                    filters.push(tor.clone());
-                    if min_pow == 0 {
-                        filters.push(tor.custom_tag(RELAY_NETWORK_TYPE, "!pow"));
+            futures.push(tokio::spawn({
+                let this = this.clone();
+                async move {
+                    log::debug!("discovering relays");
+                    let no_auth = Nip66Tag::Requirement {
+                        requirement: Requirement::Auth,
+                        is_required: false,
                     }
-                }
+                    .to_tag();
+                    let no_payment = Nip66Tag::Requirement {
+                        requirement: Requirement::Payment,
+                        is_required: false,
+                    }
+                    .to_tag();
+                    let filter = this
+                        .filter_in_update_interval_with_age(match mode {
+                            UpdateMode::InitializeRelays => 2 * WEEK_SECS,
+                            UpdateMode::FirstFullUpdate => WEEK_SECS,
+                            _ => 0,
+                        })
+                        .kind(EventKind::RelayDiscovery)
+                        .custom_tag(
+                            no_auth.single_letter_tag().context("tag")?,
+                            no_auth.content().context("content")?,
+                        )
+                        .custom_tag(
+                            no_payment.single_letter_tag().context("tag")?,
+                            no_payment.content().context("content")?,
+                        );
 
-                let mut stream = this
-                    .nostr_client
-                    .stream_events(filters)
-                    .timeout(timeout)
-                    .policy(policy)
-                    .await
-                    .context("relay_discovery")?;
+                    // TODO
+                    let clearnet = filter.clone().custom_tag(RELAY_NETWORK_TYPE, "clearnet");
+                    let ssl = clearnet.clone().custom_tag(RELAY_CAPABILITY, "ssl");
+                    let mut filters = vec![clearnet.clone(), ssl.clone()];
 
-                let mut discovered = IndexSet::<RelayUrl>::default();
-                let mut discovered_bot_unfriendly = IndexSet::<RelayUrl>::default();
-                let relay_lists: RelayLists = { this.policy.relay_lists().read().await.clone() };
-                while let Some((_, stream_event)) = stream.next().await {
-                    if let Ok(event) = stream_event
-                        && event.kind == EventKind::RelayDiscovery
-                        && !this.args.no_nip66_discovery
-                        && let Some(Ok(url)) =
-                            event.tags.identifier().as_deref().map(RelayUrl::parse)
-                        && !relay_lists.contains(&url)
-                        && (this.maybe_can_connect_to_tor() || !url.is_onion())
-                    {
-                        if event.tags.iter().any(|t| {
-                            // TODO
-                            t.single_letter_tag() == Some(LABEL)
-                                && t.as_slice()
-                                    .get(1)
-                                    .map(|t| t.to_lowercase().contains("cloudflare"))
-                                    .unwrap_or_default()
-                        }) {
-                            discovered_bot_unfriendly.insert(url);
-                        } else {
-                            discovered.insert(url);
-                            free_pool_entries -= 1;
-                            if free_pool_entries == 0 {
-                                break;
+                    let min_pow = this.args.min_pow.unwrap_or_default();
+                    if min_pow == 0 {
+                        filters.extend([
+                            clearnet.custom_tag(RELAY_NETWORK_TYPE, "!pow"),
+                            ssl.custom_tag(RELAY_NETWORK_TYPE, "!pow"),
+                        ]);
+                    }
+
+                    if this.maybe_can_connect_to_tor() {
+                        let tor = filter.custom_tag(RELAY_NETWORK_TYPE, "tor");
+                        filters.push(tor.clone());
+                        if min_pow == 0 {
+                            filters.push(tor.custom_tag(RELAY_NETWORK_TYPE, "!pow"));
+                        }
+                    }
+
+                    let mut stream = this
+                        .nostr_client
+                        .stream_events(filters)
+                        .timeout(timeout)
+                        .policy(policy)
+                        .await
+                        .context("relay_discovery")?;
+
+                    let mut discovered = IndexSet::<RelayUrl>::default();
+                    let mut discovered_bot_unfriendly = IndexSet::<RelayUrl>::default();
+                    let relay_lists: RelayLists =
+                        { this.policy.relay_lists().read().await.clone() };
+                    while let Some((_, stream_event)) = stream.next().await {
+                        if let Ok(event) = stream_event
+                            && event.kind == EventKind::RelayDiscovery
+                            && !this.args.no_nip66_discovery
+                            && let Some(Ok(url)) =
+                                event.tags.identifier().as_deref().map(RelayUrl::parse)
+                            && !relay_lists.contains(&url)
+                            && (this.maybe_can_connect_to_tor() || !url.is_onion())
+                        {
+                            if event.tags.iter().any(|t| {
+                                // TODO
+                                t.single_letter_tag() == Some(LABEL)
+                                    && t.as_slice()
+                                        .get(1)
+                                        .map(|t| t.to_lowercase().contains("cloudflare"))
+                                        .unwrap_or_default()
+                            }) {
+                                discovered_bot_unfriendly.insert(url);
+                            } else {
+                                discovered.insert(url);
+                                free_pool_entries -= 1;
+                                if free_pool_entries == 0 {
+                                    break;
+                                }
                             }
                         }
                     }
+
+                    discovered_bot_unfriendly = discovered_bot_unfriendly
+                        .into_iter()
+                        .take(free_pool_entries)
+                        .collect();
+
+                    log::info!(
+                        "discovered {} new relays + {} bot-unfriendly relays",
+                        discovered.len(),
+                        discovered_bot_unfriendly.len()
+                    );
+
+                    {
+                        this.policy
+                            .relay_lists()
+                            .write()
+                            .await
+                            .read_write
+                            .extend(discovered.into_iter().chain(discovered_bot_unfriendly));
+                    };
+
+                    Ok::<_, ah::Error>(())
                 }
+            }));
+        }
 
-                discovered_bot_unfriendly = discovered_bot_unfriendly
-                    .into_iter()
-                    .take(free_pool_entries)
-                    .collect();
+        if let UpdateMode::FirstFullUpdate
+        | UpdateMode::FullUpdate
+        | UpdateMode::PartialGossipUpdate = mode
+            && !this.args.no_mentions
+            && let Some(pubkeys) = this.args.pubkeys.clone()
+        {
+            futures.push(tokio::spawn({
+                let this = this.clone();
+                async move {
+                    let author_to_contact_list: HashMap<_, _> =
+                        { this.facts.read().await.author_to_contact_list.clone() };
+                    let filters = pubkeys
+                        .0
+                        .iter()
+                        .map(|a| {
+                            let filter = Filter::new().kind(EventKind::ContactList).author(*a);
+                            if let Some(created_at) =
+                                author_to_contact_list.get(a).map(|(_, ts)| *ts + 1)
+                            {
+                                filter.since(created_at)
+                            } else {
+                                filter
+                            }
+                        })
+                        .collect::<Vec<_>>();
 
-                log::info!(
-                    "discovered {} new relays + {} bot-unfriendly relays",
-                    discovered.len(),
-                    discovered_bot_unfriendly.len()
-                );
-
-                {
-                    this.policy
-                        .relay_lists()
-                        .write()
+                    let new_lists = this
+                        .nostr_client
+                        .fetch_events(filters)
+                        .timeout(this.args.request_timeout.0)
                         .await
-                        .read_write
-                        .extend(discovered.into_iter().chain(discovered_bot_unfriendly));
-                };
+                        .context("fetch contact lists")?
+                        .into_iter()
+                        .chunk_by(|e| e.pubkey)
+                        .into_iter()
+                        .flat_map(|(_, events)| {
+                            events.into_iter().max_by_key(|e| e.created_at).into_iter()
+                        })
+                        .map(|e| {
+                            (
+                                e.pubkey,
+                                (
+                                    e.tags.public_keys().collect::<HashSet<PublicKey>>(),
+                                    e.created_at,
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>();
 
-                Ok::<_, ah::Error>(())
+                    {
+                        let mut lock = this.facts.write().await;
+                        lock.author_to_contact_list.extend(new_lists);
+                        log::debug!(
+                            "author's contact lists {:?}",
+                            lock.author_to_contact_list
+                                .iter()
+                                .map(|(p, (i, _))| (p, i.len()))
+                                .collect::<HashMap<_, _>>()
+                        );
+                    }
+                    Ok(())
+                }
             }));
         }
 
@@ -532,10 +632,14 @@ impl Relays {
             if !this.args.no_mentions
                 && let Some(nostr_utils::PublicKeys(authors)) = &this.args.pubkeys
                 && event.tags.public_keys().any(|p| authors.contains(&p))
-                && let Err(e) = check_possible_spam(&event).await
             {
-                log::error!("possible spam check failure: {e}");
-            } else if let Err(e) = Self::handle_event(this, event, found_on_relays, 1).await {
+                if let Err(e) = check_possible_spam(&event, this.clone()).await {
+                    log::error!("possible spam check failure: {e}");
+                    return;
+                }
+            }
+
+            if let Err(e) = Self::handle_event(this, event, found_on_relays, 1).await {
                 log::error!("failed to handle a message: {e}");
             }
         });
@@ -548,16 +652,22 @@ impl Relays {
         found_on_relays: IndexSet<RelayUrl>,
         retry: usize,
     ) -> ah::Result<()> {
+        {
+            let mut lock = this.facts.write().await;
+            lock.events_metadata
+                .insert(event.id, EventMetadata::new(&event));
+        }
+
         let mut pubkeys = HashSet::default();
 
         {
-            let mut seen_pubkeys = this.seen_pubkeys.lock().await;
+            let mut gossip = this.gossip.lock().await;
             for i in iter::once(event.pubkey).chain(event.tags.public_keys()) {
-                seen_pubkeys.put(i, Default::default());
+                gossip.put(i, Default::default());
                 pubkeys.insert(i);
             }
 
-            this.update_relays(UpdateMode::PartialGossipUpdate, &mut seen_pubkeys)
+            this.update_relays(UpdateMode::PartialGossipUpdate, &mut gossip)
                 .await?;
         }
 
@@ -678,7 +788,7 @@ impl Relays {
         event: Option<&Event>,
     ) {
         join_all(relays_without_event.into_iter().map(async |relay_url| {
-            let permit = this.relays_failure_budget.acquire().await;
+            let permit = this.http_client_budget.acquire().await;
             log::debug!("checking {relay_url} after failure");
             let relay = this
                 .nostr_client
@@ -1012,18 +1122,21 @@ impl RelaysAndSenders {
         let relays = Arc::new(Relays {
             nostr_client,
             http_client,
+            http_client_budget: Semaphore::const_new(MAX_CONCURRENT_HTTP_REQUESTS),
             args: args.clone(),
             policy: Arc::new(Policy::new(policy, args)),
-            seen_pubkeys: Arc::new(Mutex::new(LruCache::new(MAX_SEEN_AUTHORS))),
-            facts: RwLock::new(RelayFacts {
+            gossip: Arc::new(Mutex::new(LruCache::new(MAX_GOSSIP_USERS))),
+            facts: RwLock::new(Facts {
                 seen_relay_info_after_failure: Default::default(),
                 found_relevant_event: if let Some(max_relays) = args.max_relays {
                     LruCache::new(max_relays)
                 } else {
                     LruCache::unbounded()
                 },
+                author_to_contact_list: HashMap::default(),
+                possible_spammers: LruCache::new(POSSIBLE_SPAMMERS_CACHE),
+                events_metadata: HashMap::default(),
             }),
-            relays_failure_budget: Semaphore::const_new(MAX_CONCURRENT_FAILURE_CHECKS),
         });
 
         Ok(Self {
@@ -1079,13 +1192,12 @@ impl QueryEvent {
                         };
 
                         match relay
-                            .fetch_events(filter.clone())
+                            .fetch_events(filter)
                             .timeout(args.request_timeout.0)
                             .await
                         {
                             Ok(events) if !events.is_empty() => events
                                 .into_iter()
-                                .filter(|e| filter.match_event(e, MatchEventOptions::default()))
                                 .max_by_key(|e| e.created_at)
                                 .map(|e| (e, relay_url)),
                             Ok(_) => None,
@@ -1131,6 +1243,7 @@ impl QueryEvent {
     }
 }
 
+// TODO: remove?
 impl RelayListCreatedAt {
     pub fn new(value: Option<u64>) -> Self {
         Self(value.map(Timestamp::from_secs))
