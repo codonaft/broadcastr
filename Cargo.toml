@@ -29,8 +29,8 @@ log = "0.4"
 lru = "0.18"
 mime = "0.3"
 nonzero_ext = "0.3"
-nostr = { git = "https://github.com/alopatindev/nostr", rev = "14b13865fc41e4a61c2fa9e360482f17e0ae8733" }
-nostr-sdk = { git = "https://github.com/alopatindev/nostr", rev = "14b13865fc41e4a61c2fa9e360482f17e0ae8733" }
+nostr = { git = "https://github.com/rust-nostr/nostr", rev = "df49d36ec29a168035db8b27a466acba45339875" }
+nostr-sdk = { git = "https://github.com/rust-nostr/nostr", rev = "df49d36ec29a168035db8b27a466acba45339875" }
 parking_lot = "0.12"
 reqwest = { version = "0.13", features = ["json", "socks"] }
 rustls = { version = "0.23", features = ["ring"] }

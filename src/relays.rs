@@ -17,7 +17,9 @@ use nostr::{
     Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, Timestamp,
     event::tag::TagCodec,
     filter::{MatchEventOptions, SingleLetterTag},
-    nips::{nip11::RelayInformationDocument, nip66::Nip66Tag},
+    nips::{nip11::RelayInformationDocument,
+        nip66::{Nip66Tag, Requirement},
+    },
     serde_json,
     util::JsonUtil,
 };
@@ -732,14 +734,17 @@ impl Relays {
                     .into_iter()
                     .filter_map(|t| Nip66Tag::parse(t).ok())
                     .filter_map(|t| match t {
-                        Nip66Tag::Requirement(requirement) => Some(requirement),
+                        Nip66Tag::Requirement {
+                            requirement,
+                            is_required,
+                        } if is_required => Some(requirement),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
                 log::debug!("relay {relay_url} has requirements {requirements:?}");
                 has_limitation = requirements
                     .iter()
-                    .any(|t| ["auth", "payment"].contains(&t.as_str()));
+                    .any(|t| [Requirement::Auth, Requirement::Payment].contains(&t));
 
                 let info_from_discovery =
                     RelayInformationDocument::from_json(&relay_discovery.content);
