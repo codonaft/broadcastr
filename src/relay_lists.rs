@@ -67,10 +67,7 @@ impl RelayLists {
                     Ok(Default::default())
                 }
             });
-        let raw_lists = join_all(futures)
-            .await
-            .into_iter()
-            .collect::<Vec<ah::Result<Vec<_>>>>();
+        let raw_lists = join_all(futures).await.into_iter().collect_vec();
 
         let ParsedUrlFragments {
             relay_to_kinds,
@@ -220,7 +217,7 @@ impl RelayLists {
                     f
                 }
             })
-            .collect::<Vec<_>>();
+            .collect_vec();
 
         for event in relays
             .nostr_client
@@ -301,7 +298,7 @@ impl RelayLists {
             .await?
             .into_iter()
             .flatten()
-            .collect::<Vec<Url>>();
+            .collect_vec();
         Ok(result)
     }
 

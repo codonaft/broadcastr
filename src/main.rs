@@ -106,6 +106,10 @@ struct Broadcastr {
     #[argh(switch)]
     no_azzamo: bool,
 
+    /// trusted humans or bots that report spammers
+    #[argh(option)]
+    moderators: Option<nostr_utils::PublicKeys>,
+
     /// connect to tor onion relays using socks5 proxy
     /// (e.g. "127.0.0.1:9050")
     #[argh(option)]

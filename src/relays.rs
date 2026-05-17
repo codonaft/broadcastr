@@ -4,7 +4,7 @@ use crate::{
     policy::InnerPolicy,
     proxied_client_builder,
     relay_lists::{MAX_GOSSIP_USERS, RelayLists},
-    spam::check_possible_spam,
+    spam,
 };
 use anyhow::{self as ah, Context};
 use backon::{BackoffBuilder, Retryable};
@@ -15,14 +15,14 @@ use itertools::{Either, Itertools};
 use lru::LruCache;
 use nostr::{
     Alphabet, Event, Filter, Kind as EventKind, PublicKey, RelayUrl, Timestamp,
-    event::{EventId, tag::TagCodec},
+    event::tag::TagCodec,
     filter::SingleLetterTag,
     nips::{
         nip11::RelayInformationDocument,
         nip66::{Nip66Tag, Requirement},
     },
     serde_json,
-    util::JsonUtil,
+    util::{BoxedFuture, JsonUtil},
 };
 use nostr_sdk::{
     client::{Client as NostrClient, GossipConfig, GossipRelayLimits},
@@ -62,7 +62,8 @@ const FATAL_CONNECTION_ERRORS: [&str; 7] = [
 const WARMUP: Duration = Duration::from_secs(15);
 const WEEK_SECS: u64 = 7 * Duration::from_hours(24).as_secs();
 
-const NEWEST_EVENT_ATTEMPTS: usize = 3;
+const NEWEST_EVENT_ATTEMPTS: u8 = 3;
+const MAX_EVENTS_DEPTH: u8 = 3;
 
 const POSSIBLE_SPAMMERS_CACHE: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
@@ -83,22 +84,6 @@ pub(crate) struct Facts {
     pub seen_relay_info_after_failure: HashSet<RelayUrl>,
     pub author_to_contact_list: HashMap<PublicKey, (HashSet<PublicKey>, Timestamp)>,
     pub possible_spammers: LruCache<PublicKey, bool>,
-    pub events_metadata: HashMap<EventId, EventMetadata>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct EventMetadata {
-    pub created_at: Timestamp,
-    pub time_to_read: Duration,
-}
-
-impl EventMetadata {
-    pub(crate) fn new(event: &Event) -> Self {
-        Self {
-            created_at: event.created_at,
-            time_to_read: Duration::from_secs_f64(event.content.len() as f64 * 0.04),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -309,10 +294,7 @@ impl Relays {
             .filter(|i| i.status().is_connected())
             .count();
 
-        let blocked_relays = blocked_relays
-            .keys()
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>();
+        let blocked_relays = blocked_relays.keys().map(|i| i.to_string()).collect_vec();
         log::info!(
             "currently connected to {connected_relays} of {} relays, blocked {} relays",
             client_relays.len(),
@@ -341,7 +323,6 @@ impl Relays {
                 let filter = this.filter_in_update_interval_with_age(0).kinds(kinds.0);
                 let mut filters = vec![filter.clone().authors(pubkeys.0.iter().copied())];
                 if !this.args.no_mentions {
-                    // TODO: q-tag? probably no, because "Authors of the e and q tags SHOULD be added as p tags to notify of a new reply or quote"
                     filters.push(filter.pubkeys(pubkeys.0));
                 }
 
@@ -365,6 +346,7 @@ impl Relays {
                                 None,
                                 IndexSet::from([stream_relay_url]),
                                 allow_protected,
+                                1,
                             )
                             .await
                             {
@@ -561,7 +543,7 @@ impl Relays {
                                 filter
                             }
                         })
-                        .collect::<Vec<_>>();
+                        .collect_vec();
 
                     let new_lists = this
                         .nostr_client
@@ -584,7 +566,7 @@ impl Relays {
                                 ),
                             )
                         })
-                        .collect::<Vec<_>>();
+                        .collect_vec();
 
                     {
                         let mut lock = this.facts.write().await;
@@ -613,51 +595,96 @@ impl Relays {
         result.map_err(ah::Error::from)
     }
 
-    pub(crate) async fn spawn_handle_event(
+    pub(crate) fn spawn_handle_event(
         this: Arc<Self>,
         event: Event,
         ip: Option<IpAddr>,
         found_on_relays: IndexSet<RelayUrl>,
         allow_protected: bool,
-    ) -> ah::Result<()> {
-        this.policy.check(&event, ip).await?;
+        depth: u8,
+    ) -> BoxedFuture<'static, ah::Result<()>> {
+        Box::pin(async move {
+            this.policy.check(&event, ip).await?;
 
-        if !allow_protected && !this.args.no_protect && event.is_protected() {
             let event_id = event.id;
-            log::info!("ignoring event {event_id} due to NIP-70 protection tag");
-            return Err(ah::anyhow!("protected"));
-        }
+            if !allow_protected && !this.args.no_protect && event.is_protected() {
+                ah::bail!("ignoring event {event_id} due to NIP-70 protection tag");
+            }
 
-        tokio::spawn(async move {
-            if !this.args.no_mentions
-                && let Some(nostr_utils::PublicKeys(authors)) = &this.args.pubkeys
-                && event.tags.public_keys().any(|p| authors.contains(&p))
+            if let Some(kinds) = &this.args.kinds
+                && !kinds.0.is_empty()
+                && !kinds.0.contains(&event.kind)
             {
-                if let Err(e) = check_possible_spam(&event, this.clone()).await {
-                    log::error!("possible spam check failure: {e}");
-                    return;
-                }
+                ah::bail!("unexpected kind {}", event.kind);
             }
 
-            if let Err(e) = Self::handle_event(this, event, found_on_relays, 1).await {
-                log::error!("failed to handle a message: {e}");
-            }
-        });
-        Ok(())
+            tokio::spawn(async move {
+                if this.args.no_mentions && this.args.pubkeys.is_none() {
+                    if let Err(e) = spam::check_sanity(&event, this.clone()).await {
+                        log::info!("stranger sanity: {e}");
+                        return;
+                    }
+                } else {
+                    if let Some(nostr_utils::PublicKeys(authors)) = &this.args.pubkeys
+                        && !authors.is_empty()
+                        && !authors.contains(&event.pubkey)
+                    {
+                        log::info!("event {event_id} is from stranger");
+                        if let Err(e) = spam::check_stranger(&event, authors, this.clone()).await {
+                            log::info!("stranger: {e}");
+                            return;
+                        }
+                    }
+
+                    if depth < MAX_EVENTS_DEPTH {
+                        tokio::spawn({
+                            let this = this.clone();
+                            let event = event.clone();
+                            async move {
+                                let events = this
+                                    .nostr_client
+                                    .fetch_events(
+                                        Filter::new()
+                                            .ids(event.tags.event_ids().collect_vec())
+                                            .until(event.created_at),
+                                    )
+                                    .timeout(this.args.request_timeout.0)
+                                    .await
+                                    .into_iter()
+                                    .flat_map(|i| i.into_iter());
+                                for i in events {
+                                    let _ = Self::spawn_handle_event(
+                                        this.clone(),
+                                        i,
+                                        None,
+                                        Default::default(),
+                                        false,
+                                        depth + 1,
+                                    )
+                                    .await;
+                                }
+                                Ok::<_, ah::Error>(())
+                            }
+                        });
+                    } else {
+                        log::info!("reached max depth in the event tree");
+                    }
+                }
+
+                if let Err(e) = Self::handle_event(this, event, found_on_relays, 1).await {
+                    log::error!("failed to handle message: {e}");
+                }
+            });
+            Ok(())
+        })
     }
 
     async fn handle_event(
         this: Arc<Self>,
         event: Event,
         found_on_relays: IndexSet<RelayUrl>,
-        retry: usize,
+        retry: u8,
     ) -> ah::Result<()> {
-        {
-            let mut lock = this.facts.write().await;
-            lock.events_metadata
-                .insert(event.id, EventMetadata::new(&event));
-        }
-
         let mut pubkeys = HashSet::default();
 
         {
@@ -850,11 +877,11 @@ impl Relays {
                         } if is_required => Some(requirement),
                         _ => None,
                     })
-                    .collect::<Vec<_>>();
+                    .collect_vec();
                 log::debug!("relay {relay_url} has requirements {requirements:?}");
                 has_limitation = requirements
                     .iter()
-                    .any(|t| [Requirement::Auth, Requirement::Payment].contains(&t));
+                    .any(|t| [Requirement::Auth, Requirement::Payment].contains(t));
 
                 let info_from_discovery =
                     RelayInformationDocument::from_json(&relay_discovery.content);
@@ -1135,7 +1162,6 @@ impl RelaysAndSenders {
                 },
                 author_to_contact_list: HashMap::default(),
                 possible_spammers: LruCache::new(POSSIBLE_SPAMMERS_CACHE),
-                events_metadata: HashMap::default(),
             }),
         });
 

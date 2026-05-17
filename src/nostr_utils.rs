@@ -155,6 +155,7 @@ async fn handle_client_message(
                 ip,
                 Default::default(),
                 allow_protected,
+                1,
             )
             .await
             {

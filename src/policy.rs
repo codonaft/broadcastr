@@ -163,12 +163,6 @@ impl InnerPolicy {
             ah::bail!("event from the future");
         }
 
-        if let Some(min_pow) = self.min_pow
-            && !event.check_pow(min_pow)
-        {
-            ah::bail!("unexpected pow < {min_pow}");
-        }
-
         if ((!self.no_gossip_discovery && event.kind == EventKind::RelayList)
             || (!self.no_nip66_discovery && event.kind == EventKind::RelayDiscovery))
             && !self.is_spam(event)
@@ -176,8 +170,14 @@ impl InnerPolicy {
             return Ok(());
         }
 
-        if !self.no_mentions && event.kind == EventKind::Metadata {
+        if !self.no_mentions && event.kind == EventKind::Metadata && !self.is_spam(event) {
             return Ok(());
+        }
+
+        if let Some(min_pow) = self.min_pow
+            && !event.check_pow(min_pow)
+        {
+            ah::bail!("unexpected pow < {min_pow}");
         }
 
         if !self.kinds.is_empty() && !self.kinds.contains(&event.kind) {
@@ -189,8 +189,6 @@ impl InnerPolicy {
 
             if self.no_mentions {
                 ah::bail!("unexpected author");
-            } else if !self.mentions_allowed_pubkeys(event) {
-                ah::bail!("unexpected author or mentioned public key");
             }
         }
 
@@ -210,15 +208,6 @@ impl InnerPolicy {
             AdmitStatus::Success
         };
         Ok(result)
-    }
-
-    fn mentions_allowed_pubkeys(&self, event: &Event) -> bool {
-        event.kind != EventKind::ContactList
-            && event
-                .tags
-                .public_keys()
-                .find(|i| self.pubkeys.contains(i))
-                .is_some()
     }
 
     fn is_spam(&self, event: &Event) -> bool {
